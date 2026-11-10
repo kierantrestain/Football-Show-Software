@@ -70,9 +70,9 @@ export function useStagedFrames(credentials: SessionCredentials | null, ...conte
       try {
         const image = await decodeImage(url)
         if (!image.naturalWidth || !image.naturalHeight) throw new Error('The staged frame has no dimensions.')
+        if (!cached) await cacheProgrammeFrame(cacheId, blob).catch(() => {})
         if (controller.signal.aborted) throw new Error('Frame request superseded.')
         current.set(key, { url, ratio: image.naturalWidth / image.naturalHeight })
-        if (!cached) void cacheProgrammeFrame(cacheId, blob).catch(() => {})
       } catch (error) {
         URL.revokeObjectURL(url)
         throw error

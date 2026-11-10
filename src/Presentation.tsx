@@ -6,7 +6,7 @@ import { Scorebug } from './Scorebug'
 import { TacticsEditor } from './TacticsEditor'
 import { BroadcastGraphic } from './data'
 import { currentScene, switchCue, switchScene, timeAt, togglePlay, useLocalPreview, usePlayoutTime, withScene, type OutputFormat, type Playout } from './playback'
-import { credentialsFromUrl, sessionUrl, useSession } from './session'
+import { credentialsFromUrl, rememberOnAir, sessionUrl, useSession } from './session'
 import type { SessionCredentials } from './session-types'
 import { useMedia } from './useMedia'
 import { activeSceneMedia, sceneFrameMatches } from './media-reference'
@@ -83,7 +83,10 @@ export function OutputRoute({ id, fallback }: { id: string; fallback: Playout })
     else if (candidate && ready) setLastGood({ content: candidate, heldAt: state?.heldAt })
     else if (candidate) setLastGood(previous => previous && previous.heldAt == null
       ? { ...previous, heldAt: Date.now() } : previous)
-  }, [candidate, ready, state?.heldAt])
+    if (state && credentials && (candidate === null || candidate && ready)) {
+      rememberOnAir(state, credentials.token)
+    }
+  }, [candidate, credentials, ready, state])
   useEffect(() => {
     document.body.classList.add('on-air-body')
     return () => document.body.classList.remove('on-air-body')

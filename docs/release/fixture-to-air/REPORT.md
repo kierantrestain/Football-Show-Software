@@ -1,0 +1,41 @@
+# Fixture to air · review release
+
+Review branch `release/fixture-to-air`. Baseline production and main both served `6e254064e173633a35fa5782af1f08b6c8e2afc2` on 10 November 2026. The baseline was reproduced in a clean browser. Premier League returned zero rows when the token was missing, the fictional project was the default, and a reduced roster could pick up a demo player on formation change. The six before captures are from the public baseline.
+
+## Gate status
+
+| Gate | Result | Evidence and clearance |
+| --- | --- | --- |
+| Data | **Fail** | A clean profile opens the keyless 2026/27 snapshot. PL has 380 fixtures and 72 scores, with 28 past fixtures awaiting verification and complete results through MW7. CL and EL each have 144 league-phase fixtures and 72 scores through MD4. The United–Villa date and 4–4 result are pinned. Bring the PL results up to the latest completed round and add permitted season records, lineups and metrics. |
+| Teams | **Fail** | The published United–Villa XIs were checked, but redistribution clearance was unavailable. Bundled usable squad and confirmed XI coverage is zero. Authorised-pack mechanics passed with synthetic identities, including 22 active identities, substitutions, dismissals, formation and reload. Incomplete real boards stay in repair and the verified result can be cued separately. Supply cleared records for 20 PL clubs and the supported UEFA competitions, with both confirmed XIs for the pinned fixture. |
+| Operator | **Pass in browser** | Cached fixture row to a populated board took two clicks and 127 ms in the targeted Chrome run using the synthetic QA pack. The touch-emulated select, Pass, reception and scrub check took 123 ms. The viewport transform remained fixed across pass and run. Bend, reverse, undo and replay were exercised. The real-XI production rehearsal depends on the data clearance above. |
+| Stills and TV | **Pass in browser** | Independent producer, two presenters and TV exercised distinct staged images, advance, pitch, graphics, hold, clear, revoke and reconnect. The media regression exercised a failed frame read while keeping the previous TV picture and a retry. Annotated PNGs were decoded at 1920 × 1080 and 3840 × 2160, and the test checked the image and mark geometry. |
+| Visual | **Pass in browser** | Desktop, laptop, tablet landscape and portrait, 1080p and 4K captures were inspected. The 1280 × 800 editor fits the full board and primary controls. A synthetic 4K stress result kept long club names and separate 12–12 and 10–9 shootout figures inside the title-safe area. Repeat on the two production tablets and the OBS/TV hardware before sign-off. |
+
+The fixture coverage and independent source and permission checks are in [football data evidence](../football-data.md). The separated frame upload, cache, viewer authority and recovery are in [still playout evidence](../still-playout.md).
+
+## Captures
+
+The paired editor, still and result captures use the same explicit rehearsal match and original synthetic still. The second set shows the independently checked United–Villa result and a separate board populated with synthetic QA identities. No club imagery or match photographs are included in the snapshot.
+
+- Laptop editor [before](before/editor-1280.png) and [after](after/comparison-editor-1280.png)
+- Still editing [before](before/still-1280.png) and [after](after/comparison-still-1280.png)
+- Graphic workbench [before](before/result-graphic-1280.png) and [after](after/comparison-result-graphic-1280.png)
+- 1080p TV still [before](before/tv-still-1080.png) and [after](after/comparison-tv-still-1080.png)
+- 1080p TV result [before](before/tv-result-1080.png) and [after](after/comparison-tv-result-1080.png)
+- [Real fixture desk](after/real-match-1280.png), [scorebug with QA pack](after/real-fixture-qa-board-1280.png), [United–Villa at 1080p](after/real-result-1080.png) and [United–Villa at 4K](after/real-result-4k.png)
+- [1920 × 1080 desktop editor](after/editor-1920.png), [1440 × 900 desktop editor](after/editor-1440.png), [tablet landscape](after/editor-touch-landscape.png), [tablet portrait](after/editor-touch-portrait.png), and [portrait still](after/still-portrait-1280.png)
+
+## Local workflow
+
+Run from the branch with Node 22.
+
+```sh
+npm ci
+npm run build
+npm run studio
+```
+
+Open the Studio home at `http://localhost:8787`. Choose a cached fixture or use **Find a fixture**. **Open rehearsal** explicitly loads the fictional production. For production rosters, review an authorised JSON pack in Match Data. If a fixture has no eligible XI, **Roster repair** preserves any sourced identities already selected. It shows the exact gaps and can import a fixture-specific candidate pack.
+
+The staging step uploads each referenced still or video frame separately before publishing preview. If the producer's frame is missing or the TV cannot decode the new frame, the last good on-air picture stays visible. The OBS browser source uses the independent viewer URL. [OBS Browser Source](https://obsproject.com/kb/browser-source)

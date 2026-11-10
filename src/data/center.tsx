@@ -50,7 +50,20 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
   const [tableFeed, setTableFeed] = useState<{ standings: Standing[]; message?: string; loading?: boolean }>({ standings: [] })
   const demo = competition === 'demo'
   const pinned = useMemo(() => fixturesFor(competition, season, snapshot.pack), [competition, season, snapshot])
-  const matches = demo ? demoMatches : pinned.length && !licensed ? pinned : matchFeed.matches.length ? matchFeed.matches : pinned
+  const matches = useMemo(() => {
+    if (demo) return demoMatches
+    if (!matchFeed.matches.length || (pinned.length && !licensed)) return pinned
+    const pinById = new Map(pinned.map(match => [match.id, match]))
+    return matchFeed.matches.map<Match>(match => {
+      const original = pinById.get(match.id)
+      if (original?.verification?.status !== 'verified') return match
+      const changedKickoff = Date.parse(original.kickoff) !== Date.parse(match.kickoff)
+      const changedScore = original.score && match.score && original.score.join(':') !== match.score.join(':')
+      if (changedKickoff || changedScore) return { ...match, score: undefined, shootout: undefined, status: 'awaiting',
+        verification: { ...original.verification, status: 'conflict', note: 'The licensed feed differs from the independently checked fixture. Verify the changed kickoff or result before taking it to air.' } }
+      return { ...match, ...(original.score && !match.score ? { status: original.status, score: original.score } : {}), verification: original.verification }
+    })
+  }, [demo, licensed, pinned, matchFeed.matches])
   const active = matches.find(match => match.id === activeId) || (demo ? matches[0] : matches.filter(match => match.status === 'finished' && match.verification?.status === 'verified').at(-1))
     || matches.filter(match => match.status === 'finished').at(-1) || matches.find(match => match.status === 'scheduled') || matches[0]
   const source = matches[0]?.source
@@ -63,13 +76,14 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
     if (!useProvider) return
     const controller = new AbortController()
     footballProvider.matches(competition, season, controller.signal).then(feed => {
-      const matches = feed.matches || []
+      if (controller.signal.aborted) return
+      const matches = pinned.length && feed.source?.kind !== 'provider' ? [] : feed.matches || []
       const closest = [...matches].sort((left, right) => Math.abs(Date.parse(left.kickoff) - Date.now()) - Math.abs(Date.parse(right.kickoff) - Date.now()))[0]
       setMatchFeed({ matches, source: feed.source, message: feed.error || feed.message || (feed.stale ? 'Showing the last available provider snapshot.' : '') })
       if (closest) setActiveId(closest.id)
     }).catch(() => {})
     return () => controller.abort()
-  }, [competition, season, useProvider])
+  }, [competition, season, pinned.length, useProvider])
   useEffect(() => {
     if (!shouldFetchTable) return
     const controller = new AbortController()
@@ -99,10 +113,10 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
       <div><span className="desk-eyebrow"><Radio size={14} /> ANALYSIS / DATA DESK</span><h1>Match intelligence</h1></div>
       <div className="desk-heading-controls">
         {demo ? <span className="desk-source-tag">Fictional demo</span> : source && <SourceTag source={source} />}
-        <label className="desk-field"><span className="desk-sr-only">Competition</span><select value={competition} onChange={event => changeFeed(event.target.value, season)}>
+        <label className="desk-field"><span className="desk-sr-only">Competition</span><select aria-label="Competition" value={competition} onChange={event => changeFeed(event.target.value, season)}>
           {competitions.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}<option value="demo">Premier Division · Rehearsal</option>
         </select></label>
-        {!demo && <label className="desk-field"><span className="desk-sr-only">Season</span><select value={season} onChange={event => changeFeed(competition, event.target.value)}>{seasons.map(year => <option value={year} key={year}>{year}/{String(year + 1).slice(-2)}</option>)}</select></label>}
+        {!demo && <label className="desk-field"><span className="desk-sr-only">Season</span><select aria-label="Season" value={season} onChange={event => changeFeed(competition, event.target.value)}>{seasons.map(year => <option value={year} key={year}>{year}/{String(year + 1).slice(-2)}</option>)}</select></label>}
         {!demo && <label className="desk-toggle"><input type="checkbox" checked={licensed} onChange={event => { setLicensed(event.target.checked); changeFeed(competition, season) }} /> Licensed provider</label>}
       </div>
     </header>
@@ -189,7 +203,11 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
     }).catch(() => {})
     return () => controller.abort()
   }, [match.id, match.providerId, match.source.kind])
-  const active = detail || match
+  const active = detail ? { ...detail, id: match.id, fixture: match.fixture,
+    score: match.verification?.status === 'conflict' ? undefined : match.score ?? detail.score,
+    status: match.verification?.status === 'conflict' || match.verification?.status === 'verified' ? match.status : detail.status,
+    verification: match.verification ?? detail.verification,
+  } : match
   useEffect(() => {
     if (tab !== 'squads' || active.source.kind !== 'provider' || !active.home.providerId || !active.away.providerId) return
     const controller = new AbortController()
@@ -243,7 +261,7 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
     </div>
     {unverifiedResult && <p className="desk-service-message">Reported result. An independently verified record is needed to queue a full-time graphic.</p>}
     {active.verification?.note && <p className="desk-service-message">{active.verification.note}</p>}
-    {lineupKind === 'repair' && <p className="desk-service-message">Eligible XI gap · {Math.max(0, 11 - active.home.players.length)} {active.home.shortName} · {Math.max(0, 11 - active.away.players.length)} {active.away.shortName}. Import authorised records to complete the selection.</p>}
+    {lineupKind === 'repair' && <p className="desk-service-message">XI selections needed · {Math.max(0, 11 - active.home.players.length)} {active.home.shortName} · {Math.max(0, 11 - active.away.players.length)} {active.away.shortName}. Sourced squad records · {active.home.squad?.length ?? 0} home · {active.away.squad?.length ?? 0} away.</p>}
     {proposal && <section className="desk-panel" aria-label="Proposed sourced squad line-ups">
       <div className="data-two-columns"><LineupList team={active.home} label="Proposed sourced squad XI" /><LineupList team={active.away} label="Proposed sourced squad XI" /></div>
       <button type="button" className="desk-primary" onClick={() => load(undefined, true)}>Use sourced squad XIs</button>

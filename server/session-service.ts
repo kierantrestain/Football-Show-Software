@@ -198,6 +198,9 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
     if (options.validateContent && !options.validateContent(content)) {
       throw new SessionProblem(422, options.contentError?.(content) ?? 'This board, cue or graphic is invalid and was withheld from the studio.')
     }
+    if (content.mediaManifest !== undefined && !validMediaManifest(content.mediaManifest)) {
+      throw new SessionProblem(422, 'The staged frame manifest is invalid.')
+    }
   }
 
   async function checkFrames(id: string, content: Content, all: boolean, previous?: Content | null) {

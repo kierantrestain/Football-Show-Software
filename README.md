@@ -2,7 +2,7 @@
 
 [Open the deployed studio](https://football-show-software.vercel.app)
 
-Touchline is a football analysis and broadcast production workspace. Open the bundled Northbridge–Southbank production to rehearse five scenes with both starting XIs. The clubs, match result and reconstructed positions in the demo are fictional.
+Touchline is a football analysis and broadcast production workspace. The fixture-to-air review branch opens the 2026/27 Premier League fixture preview. Choose **Open rehearsal** for the fictional five-scene Northbridge–Southbank production. [Fixture-to-air release evidence](docs/release/fixture-to-air/REPORT.md)
 
 ## Run the studio
 
@@ -30,7 +30,7 @@ The output link grants read-only access. Producer controls stay in the browser w
 
 ## Configure data and hosting
 
-Copy `.env.example` to `.env` for optional local settings. `FOOTBALL_DATA_TOKEN` enables the server-side football-data.org adapter. Coverage, match details, refresh rates, and commercial usage depend on the provider plan. The demo and historical archive open without credentials. Use footage, badges and data only where you have permission for the intended broadcast.
+Copy `.env.example` to `.env` for optional local settings. `FOOTBALL_DATA_TOKEN` enables the server-side football-data.org adapter. Coverage, match details, refresh rates, and commercial usage depend on the provider plan. The keyless fixture snapshot and historical archive open without credentials. Use Match Data to review and publish authorised roster and metric records. [Football data coverage and permissions](docs/release/football-data.md) Use footage, badges and data only where you have permission for the intended broadcast.
 
 The Vercel deployment uses the Vite build and two Node API routes. For hosted presenter sessions, connect a private Vercel Blob store with read/write credentials exposed only to the server. Build a fresh deployment after connecting the store. For sustained rehearsals or live studio use, the LAN server avoids cloud polling and storage operation quotas. LAN sessions persist in `.studio-sessions` by default.
 

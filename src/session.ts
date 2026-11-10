@@ -103,7 +103,7 @@ function loadOnAir<T>(id: string, token: string): SessionState<T> | null {
   }
 }
 
-function rememberOnAir<T>(next: SessionState<T>, token: string) {
+export function rememberOnAir<T>(next: SessionState<T>, token: string) {
   if (next.role !== 'viewer') return
   try {
     if (next.live == null) {
@@ -143,7 +143,6 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
           (next.revision === current.revision && next.serverTime < current.serverTime))) return
         confirmed = next
         client.latest = next
-        if (retainOnAir) rememberOnAir(next, token)
         setView(previous => ({
           key, state: next, connection: 'connected',
           error: previous.key === key && previous.connection === 'connected' ? previous.error : null,

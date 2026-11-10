@@ -13,3 +13,11 @@ The browser application uses React, TypeScript, and Vite. A portable, versioned 
 For LAN production, a single Node process serves the app and persists session snapshots to disk. For Vercel, use a connected private Blob store and conditional writes. A presenter writes through a scoped invite and conflicting revisions are rejected. The output reads the on-air copy and retains its last known snapshot during an interruption.
 
 Browser storage is scoped to a browser profile. JSON project exports can carry media, and project-file validation checks the scene schema before import. A service worker retains the production shell and static assets after a successful online visit. Time-based playback uses a scene offset and clock anchor rather than sending a message for every frame.
+
+## Fixture-to-air review
+
+The versioned fixture record feeds the match desk, tactical scorebug, predictions and queued result cards. A graphic keeps its fixture revision until the producer selects a replacement. Season registration, matchday identity and tactical role are separate records. The board keeps the active identities stable across movement and formation changes. The session boundary checks the real roster again before it changes the on-air copy.
+
+The preparing browser keeps its current and previous authorised data packs. A central refresh validates the full open fixture snapshot before replacing its bundled revision. Outages keep the previous retrieval and result dates.
+
+Shared stills and selected video frames use a separate, authenticated upload and read path. Session commands carry frame references instead of image bytes. The viewer preloads authorised frames and retains the last decoded programme frame while a newly selected asset is unavailable.

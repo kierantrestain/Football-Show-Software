@@ -24,7 +24,7 @@ The bundle was retrieved 10 November 2026 at 01:13 UTC. The latest available sco
 | OpenLigaDB | 380 PL rows and 71 finals through one Matchweek 9 result, 144 CL rows with 72 finals, 144 EL rows with 72 finals. The separate `ucl2026` endpoint returned 32 different fixtures and zero results. | `pl`, `ucl` and `uel2026` provide the fixture spine. OpenLigaDB explicitly permits commercial use under ODbL with attribution. Cached and redistributed derivative fixture data retains ODbL. |
 | OpenFootball | 380 PL rows and 50 scores through 20 September. United–Villa remained on 7 November with no score. | CC0 candidate source. The older result and changed kickoff ruled it out as the default. |
 | open-matchday | Documentation advertises free non-commercial use and preserves upstream terms. | Excluded from the commercial review bundle. |
-| TheSportsDB | The public development-key season endpoints returned HTTP 200 and capped the result at 15 events for each target competition. Dedicated production keys and expanded limits are Premium features. Terms allow applications within rate limits, require attribution and reserve third-party rights and reselling. | No separate evidence of permitted persistent caching and database redistribution for this release. Excluded from the review bundle. |
+| TheSportsDB | The public development-key season endpoints returned HTTP 200 and 15 events per target competition. Dedicated production keys and expanded limits are Premium features. Terms allow applications within rate limits, require attribution and reserve third-party rights and reselling. | No separate evidence of permitted persistent caching and database redistribution for this release. Excluded from the review bundle. |
 | Official league and club pages | Used to compare fixture facts and verify published line-up and registration references. | Cross-check evidence. The single United–Villa correction uses the independently checked factual result supplied in the release brief. Squad lists, team sheets, crests and photography require their own authority. |
 | football-data.org | Existing optional adapter uses a server-side token. Its route returns the dated bundled snapshot when an available licensed fixture or standings request fails. | A producer may enable a provider after confirming subscription scope. The review uses the keyless snapshot by default. |
 
@@ -64,3 +64,9 @@ npx tsx scripts/check-united-villa-pack.ts /absolute/path/to/authorised-pack.jso
 ```
 
 See [snapshot licence and attribution](../../src/data/FOOTBALL-DATA-LICENSE.md).
+
+## Data checks run
+
+Node 22.22.2 passed all 12 tests in `tests/data.test.ts` and `tests/football-data-release.test.ts`. The six Match Data browser scenarios passed in Chrome against an isolated local production build. The clean-profile fixture-to-repair transition took 73 ms after clicking the selected real fixture. A separate synthetic pack test rejected a duplicate, showed the import preview, published an authorised test revision and loaded a role-sensible 22-identity proposal. The synthetic roster does not establish the real XI gate.
+
+A deliberately empty PL feed returned a validation error. The previous snapshot file SHA-256 was unchanged. The browser capture shows the keyless result, retrieval and coverage dates, and the action to open roster repair. [1440×900 Match Data capture](fixture-to-air/after/real-match-1440.png)

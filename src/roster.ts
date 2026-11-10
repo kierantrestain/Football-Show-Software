@@ -123,8 +123,16 @@ export function sceneRosterIssues(project: Project, scene: Scene): string[] {
 }
 
 export function canTakeProgramme(content: { project: Project; sceneId: string; graphic?: unknown; pip?: boolean }) {
-  if (content.graphic && object(content.graphic) && isFixtureSnapshot(content.graphic.fixture) && content.graphic.fixture.verification?.status === 'conflict') {
-    return 'Resolve the conflicting fixture records before taking this graphic to air.'
+  if (object(content.graphic)) {
+    const fixture = isFixtureSnapshot(content.graphic.fixture) ? content.graphic.fixture : undefined
+    if (fixture?.verification?.status === 'conflict') return 'Resolve the conflicting fixture records before taking this graphic to air.'
+    if (fixture && (content.graphic.kind === 'result' || content.graphic.kind === 'preview') && fixture.score && fixture.status === 'finished'
+      && fixture.source.kind !== 'demo' && fixture.verification?.status !== 'verified') {
+      return 'Verify this reported final score before taking the result graphic to air.'
+    }
+    if (!fixture && content.graphic.kind === 'result' && isMatchProject(content.project)) {
+      return 'Queue a result from Match Data to pin its verified fixture revision.'
+    }
   }
   if (content.graphic && !content.pip) return undefined
   const scene = content.project.scenes.find(item => item.id === content.sceneId)

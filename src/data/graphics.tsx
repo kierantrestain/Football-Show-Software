@@ -156,6 +156,8 @@ export function GraphicsLibrary({ onQueueGraphic, fixture, rehearsal = false }: 
   const [status, setStatus] = useState('')
   const needsSource = !rehearsal && (dataKinds.has(kind) || (fixtureKinds.has(kind) && !draft.fixture))
   const fixtureConflict = draft.fixture?.verification?.status === 'conflict'
+  const reportedResult = !rehearsal && (kind === 'result' || kind === 'preview') && draft.fixture?.status === 'finished'
+    && !!draft.fixture.score && draft.fixture.verification?.status !== 'verified'
   const available = [...new Map([...(fixture ? [fixture] : []), ...(picked ? [picked] : []), ...choices].map(item => [item.id, item])).values()]
   const latest = available.find(item => item.id === draft.fixture?.id)
   useEffect(() => {
@@ -213,8 +215,8 @@ export function GraphicsLibrary({ onQueueGraphic, fixture, rehearsal = false }: 
             </div>
             {draft.fixture && !rehearsal && <p className="desk-muted">Pinned fixture revision {draft.fixture.revision}</p>}
             {latest && latest.revision !== draft.fixture?.revision && <button className="desk-secondary" type="button" onClick={() => setDraft({ ...graphicFromFixture(latest, kind), title: draft.title })}>Update to current fixture data</button>}
-            <div className="desk-action-row"><span role="status">{status || (fixtureConflict ? 'Resolve conflicting fixture records first.' : needsSource ? 'Prepare this graphic from sourced records in Match Data.' : templates.find(template => template.kind === kind)?.desc)}</span>
-              <button className="desk-primary" type="button" disabled={needsSource || fixtureConflict || !draft.title.trim()} onClick={() => {
+            <div className="desk-action-row"><span role="status">{status || (fixtureConflict ? 'Resolve conflicting fixture records first.' : reportedResult ? 'Verify this reported result in Match Data first.' : needsSource ? 'Prepare this graphic from sourced records in Match Data.' : templates.find(template => template.kind === kind)?.desc)}</span>
+              <button className="desk-primary" type="button" disabled={needsSource || fixtureConflict || reportedResult || !draft.title.trim()} onClick={() => {
                 onQueueGraphic({ ...draft, id: `graphic-${globalThis.crypto?.randomUUID?.() || Date.now()}` })
                 setStatus('Added to studio preview')
               }}>Queue to preview <ArrowUpRight size={16} /></button>

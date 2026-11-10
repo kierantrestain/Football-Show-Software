@@ -88,11 +88,11 @@ interface Transport<T> {
 
 type OnAirCache<T> = Pick<SessionState<T>, 'id' | 'revision' | 'mode' | 'heldAt' | 'liveUpdatedAt' | 'updatedAt' | 'serverTime'> & { live: T }
 
-const outputCacheKey = (id: string) => `touchline-last-on-air/${id}`
+const outputCacheKey = (id: string, token: string) => `touchline-last-on-air/${id}/${token.slice(-24)}`
 
-function loadOnAir<T>(id: string): SessionState<T> | null {
+function loadOnAir<T>(id: string, token: string): SessionState<T> | null {
   try {
-    const raw = sessionStorage.getItem(outputCacheKey(id))
+    const raw = sessionStorage.getItem(outputCacheKey(id, token))
     if (!raw) return null
     const cached = JSON.parse(raw) as OnAirCache<T>
     if (cached.id !== id || cached.live == null || !Number.isSafeInteger(cached.revision)) return null
@@ -103,14 +103,14 @@ function loadOnAir<T>(id: string): SessionState<T> | null {
   }
 }
 
-function rememberOnAir<T>(next: SessionState<T>) {
+function rememberOnAir<T>(next: SessionState<T>, token: string) {
   if (next.role !== 'viewer') return
   try {
     if (next.live == null) {
-      sessionStorage.removeItem(outputCacheKey(next.id))
+      sessionStorage.removeItem(outputCacheKey(next.id, token))
     } else {
       const { id, revision, live, mode, heldAt, liveUpdatedAt, updatedAt, serverTime } = next
-      sessionStorage.setItem(outputCacheKey(next.id), JSON.stringify({ id, revision, live, mode, heldAt, liveUpdatedAt, updatedAt, serverTime }))
+      sessionStorage.setItem(outputCacheKey(next.id, token), JSON.stringify({ id, revision, live, mode, heldAt, liveUpdatedAt, updatedAt, serverTime }))
     }
   } catch { /* a private or restricted browser may disable storage */ }
 }
@@ -129,7 +129,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
     let polling: AbortController | undefined
     let failures = 0
     let confirmed: SessionState<T> | null = null
-    const retained = retainOnAir ? loadOnAir<T>(id) : null
+    const retained = retainOnAir ? loadOnAir<T>(id, token) : null
     const client: Transport<T> = {
       key,
       latest: retained,
@@ -143,7 +143,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
           (next.revision === current.revision && next.serverTime < current.serverTime))) return
         confirmed = next
         client.latest = next
-        if (retainOnAir) rememberOnAir(next)
+        if (retainOnAir) rememberOnAir(next, token)
         setView(previous => ({
           key, state: next, connection: 'connected',
           error: previous.key === key && previous.connection === 'connected' ? previous.error : null,

@@ -10,7 +10,7 @@ for (const item of openCompetitions) {
   if (inputs) files[item.id] = JSON.parse(await readFile(resolve(inputs, item.shortcut + '.json'), 'utf8'))
   else {
     const url = 'https://api.openligadb.de/getmatchdata/' + item.shortcut + '/2026'
-    const response = await fetch(url, { signal: AbortSignal.timeout(15_000), headers: { 'User-Agent': 'BangOnSportsHub-Snapshot/1.0 (studio refresh)' } })
+    const response = await fetch(url, { signal: AbortSignal.timeout(15_000), headers: { 'User-Agent': 'BangOnSportsHub-Snapshot/1.0 (+https://github.com/kierantrestain/Football-Show-Software)' } })
     if (!response.ok) throw new Error('OpenLigaDB ' + item.shortcut + ' responded HTTP ' + response.status + '. The current snapshot is retained.')
     files[item.id] = await response.json()
   }

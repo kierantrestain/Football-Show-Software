@@ -12,7 +12,7 @@ const fixture: FixtureSnapshot = {
   kickoff: '2026-11-08T16:30:00+00:00', status: 'finished', round: 10, score: [4, 4],
   home: { id: 'qa-h', name: 'QA Home', shortName: 'QAH', color: '#b84439' },
   away: { id: 'qa-a', name: 'QA Away', shortName: 'QAA', color: '#526bab' },
-  source: evidence,
+  source: evidence, verification: { status: 'verified' },
 }
 function people(teamId: string) {
   return Array.from({ length: 13 }, (_, i): LineupPlayer => ({
@@ -70,6 +70,7 @@ describe('fixture roster boundary', () => {
     expect(validStudioSnapshot(content)).toBe(false)
     const graphic = { id: 'ft', kind: 'result', title: 'FT', subtitle: 'Premier League', source: evidence.label, fixture }
     expect(validStudioSnapshot({ ...content, graphic })).toBe(true)
+    expect(validStudioSnapshot({ ...content, graphic: { ...graphic, fixture: { ...fixture, verification: { status: 'reported' } } } })).toBe(false)
     expect(validStudioSnapshot({ ...content, graphic, pip: true })).toBe(false)
     const legacy = { ...project, match: { ...project.match, fixture: undefined } }
     expect(canTakeProgramme({ ...content, project: legacy })).toMatch(/needs a linked fixture/)

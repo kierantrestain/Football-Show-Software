@@ -15,6 +15,7 @@ export function fixtureStatus(fixture: FixtureSnapshot) {
   const status: string = fixture.status
   const period: string = fixture.period ?? ''
   if (status === 'finished') {
+    if (fixture.verification?.status === 'reported') return 'RPT'
     if (fixture.shootout) return 'PENS'
     return /extra|aet/i.test(period) ? 'AET' : 'FT'
   }
@@ -56,7 +57,7 @@ export function FixtureResultCard({ fixture, title }: { fixture: FixtureSnapshot
         </div>)}
         <div className="result-card-score"><strong>{fixture.score?.join(' – ') ?? 'v'}</strong>{fixture.shootout
           ? <span>{fixture.shootout.join(' – ')} on penalties</span>
-          : <span>{fixture.status === 'scheduled' && status !== 'VERIFY' ? `${zonedDate.format(new Date(fixture.kickoff))} UK` : status === 'VERIFY' ? 'Awaiting verification' : status}</span>}</div>
+          : <span>{fixture.status === 'scheduled' && status !== 'VERIFY' ? `${zonedDate.format(new Date(fixture.kickoff))} UK` : status === 'VERIFY' ? 'Awaiting verification' : status === 'RPT' ? 'Reported score' : status}</span>}</div>
       </div>
       <footer><span>{fixture.source.label}</span><span>Fixture data · {fixture.revision}</span></footer>
     </section>

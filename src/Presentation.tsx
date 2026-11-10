@@ -190,7 +190,9 @@ export function PresenterConsole({ fallback, credentials, remote = false, onChan
     <div className="present-grid">
       <div className="present-stage-column">
         <div className="present-stage">
-          {boardOpen
+          {credentials && mediaKey && !stagedStill
+            ? <p className="present-loading" role="status">{failed.includes(mediaKey) ? 'Prepared still unavailable' : 'Preparing the still preview…'}</p>
+            : boardOpen
             ? <TacticsEditor scene={scene} match={content.project.match} time={timeAt(content, scene.duration)} cueIndex={content.cue}
               media={stagedStill ? <img className="analysis-media" src={stagedStill.url} alt={scene.media?.name} /> : undefined}
               onChange={value => update(withScene(content, value))} />
@@ -232,7 +234,7 @@ export function PresenterConsole({ fallback, credentials, remote = false, onChan
         <div className="cue-actions"><button className="button" aria-label="Previous cue" disabled={disabled || content.cue <= 0} onClick={() => update(switchCue(content, -1))}><ArrowLeft size={19} /></button>
           <button className="button primary" disabled={disabled || content.cue >= scene.cues.length - 1} onClick={() => update(switchCue(content, 1))}>Next cue <ArrowRight size={18} /></button></div>
         {producer && <div className="air-actions">
-          <button className="button air-take" disabled={busy || connection !== 'connected'} onClick={() => void command('take')}><Radio size={17} /> Take live</button>
+          <button className="button air-take" disabled={busy || connection !== 'connected' || !!mediaKey && !stagedStill} onClick={() => void command('take')}><Radio size={17} /> Take live</button>
           <button className="button" disabled={busy || !state?.live} onClick={() => void command('hold')}><Pause size={17} /> Hold output</button>
           <button className="button" disabled={busy || state?.mode === 'preview'} onClick={() => void command('preview')}><MonitorPlay size={17} /> Rehearse</button>
           <button className="button" disabled={busy || !state?.live} onClick={() => void command('clear')}><CircleStop size={17} /> Clear output</button>

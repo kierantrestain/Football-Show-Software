@@ -85,7 +85,8 @@ function activeLock(record: SessionRecord, now: number) {
 function state(record: SessionRecord, role: SessionRole, now: number): SessionState<Content> {
   const { id, revision, preview, live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt, tokens } = record
   return {
-    id, revision, stageRevision: record.stageRevision ?? 0, role, preview, live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt,
+    id, revision, stageRevision: record.stageRevision ?? 0, role, preview: role === 'viewer' ? live ?? {} : preview,
+    live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt,
     serverTime: now,
     lock: activeLock(record, now),
     ...(role === 'producer' ? { invites: {

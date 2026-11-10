@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Response } from '@playwright/test'
 import { setTimeout as delay } from 'node:timers/promises'
 
 async function addStill(page: Page, scene: string, width: number, height: number, colour: string, tool: string, mark: string) {
@@ -185,7 +185,22 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await addStill(producer, 'Starting Shape', 1800, 1000, '#264e42', 'Defensive line', 'line')
     await addStill(producer, 'The Press Trigger', 900, 1350, '#73432d', 'Spotlight', 'spotlight')
     await producer.getByRole('button', { name: /Starting Shape/ }).click()
+    const uploads: string[] = []
+    const captureUpload = async (response: Response) => {
+      if (new URL(response.url()).pathname === '/api/session-asset' && response.request().method() === 'POST' && response.status() === 201) {
+        uploads.push((await response.json()).key as string)
+      }
+    }
+    producer.on('response', captureUpload)
     await producer.getByRole('button', { name: 'Stage preview' }).click()
+    await expect.poll(() => uploads.length).toBe(2)
+    producer.off('response', captureUpload)
+    const secondFrame = new RegExp(`[?&]key=${uploads[1]}(?:$|&)`)
+    let failedFrameRead = false
+    await tv.route(secondFrame, route => {
+      failedFrameRead = true
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Simulated TV frame failure"}' })
+    })
     await expect(tabletB.getByRole('img', { name: 'Match analysis still' })).toBeVisible()
     await expect(graphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
     await producer.getByRole('button', { name: 'Present', exact: true }).click()
@@ -196,7 +211,19 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
     await expect(tv.locator('[data-player-id]')).toHaveCount(0)
     await testInfo.attach('telestration-landscape-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-landscape-on-air.png') }), contentType: 'image/png' })
+    await tv.setViewportSize({ width: 3840, height: 2160 })
+    const imageBounds = (await onAirImage.boundingBox())!
+    const marksBounds = (await tv.getByLabel('Media telestration canvas').boundingBox())!
+    expect(imageBounds.width / imageBounds.height).toBeCloseTo(1.8, 2)
+    expect(marksBounds).toEqual(imageBounds)
+    await expect(tv.getByRole('button')).toHaveCount(0)
+    await testInfo.attach('telestration-on-air-4K', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-on-air-4k.png') }), contentType: 'image/png' })
+    await tv.setViewportSize({ width: 1920, height: 1080 })
     await tabletA.getByRole('button', { name: 'Next scene' }).tap()
+    await expect(tabletB.locator(heading)).toHaveText('The Press Trigger')
+    await expect.poll(() => failedFrameRead).toBe(true)
+    await expect(onAirTitle).toHaveText('Starting Shape')
+    await tv.unroute(secondFrame)
     await expect(onAirTitle).toHaveText('The Press Trigger')
     await expect.poll(() => onAirImage.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(900)
     await expect(tv.locator('[aria-label="spotlight"]')).toHaveCount(1)

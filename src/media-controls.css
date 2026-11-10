@@ -76,3 +76,11 @@
   border-color: var(--accent);
   color: var(--accent);
 }
+
+.present-loading {
+  display: grid;
+  min-height: 100%;
+  margin: 0;
+  place-items: center;
+  color: var(--muted);
+}

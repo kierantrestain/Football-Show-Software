@@ -104,3 +104,64 @@ test('previews and edits a match graphic before queuing it', async ({ page }, te
   await page.getByRole('button', { name: 'Tactical title', exact: true }).click()
   await expect(page.getByTestId('broadcast-graphic')).toContainText('The midfield box')
 })
+
+test('opens real fixtures by default, previews coverage and preserves the verified result at roster repair', async ({ page }, testInfo) => {
+  await page.clock.setFixedTime(new Date('2026-11-10T01:13:00Z'))
+  await page.goto('/data')
+  await expect(page.getByLabel('Competition', { exact: true })).toHaveValue('PL')
+  await expect(page.getByLabel('Season', { exact: true })).toHaveValue('2026')
+  await expect(page.getByLabel('Data coverage')).toContainText('380/380 fixtures')
+  await expect(page.getByLabel('Data coverage')).toContainText('28 awaiting verification')
+  await expect(page.locator('.data-hero-score')).toContainText('Manchester United')
+  await expect(page.locator('.data-hero-score')).toContainText('Aston Villa')
+  await expect(page.locator('.data-hero-score')).toContainText('4 – 4')
+  await expect(page.getByText('Independently checked', { exact: false })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Queue match graphic' })).toBeEnabled()
+  await screenshot(page, testInfo, 'match-data-review')
+  await page.getByRole('button', { name: 'Upcoming', exact: true }).click()
+  await expect(page.getByRole('button', { name: /Manchester City Fulham/ })).toBeVisible()
+  await page.getByRole('button', { name: 'Results', exact: true }).click()
+  await page.getByRole('button', { name: /Manchester United Aston Villa/ }).first().click()
+  const repairStart = Date.now()
+  await page.getByRole('button', { name: 'Open roster repair' }).click()
+  await expect(page.getByRole('region', { name: 'Roster repair status' })).toBeVisible()
+  await expect(page.locator('[data-player-id]')).toHaveCount(0)
+  console.log('Real fixture result to roster repair took ' + (Date.now() - repairStart) + ' ms after selection.')
+})
+
+test('validates an authorised pack before making a squad proposal available', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-10T01:13:00Z'))
+  await page.goto('/data')
+  const roleCodes = ['GK', 'RB', 'CB', 'CB', 'LB', 'DM', 'CM', 'CM', 'RW', 'ST', 'LW']
+  const teams = ['manchester-city', 'fulham']
+  const identities = teams.flatMap((team, teamIndex) => roleCodes.map((position, index) => ({
+    id: 'synthetic-' + team + '-' + index, name: 'Test identity ' + (teamIndex + 1) + '-' + (index + 1), position, teamId: team,
+  })))
+  const players = identities.map(({ id, name, position }) => ({ id, name, position }))
+  const source = {
+    kind: 'pack', label: 'Author-owned synthetic browser test identities', url: 'https://example.com/studio-test',
+    permission: 'Synthetic browser test material', checkedAt: '2026-11-10T00:00:00Z', updatedAt: '2026-11-10T00:00:00Z',
+  }
+  const pack = {
+    schema: 1, revision: 'browser-regression', source, players,
+    registrations: identities.map(({ id, teamId }) => ({ playerId: id, teamId, competitionId: 'PL', season: '2026/27', eligibleFrom: '2026-08-21' })),
+  }
+  await page.getByText('Import authorised football records', { exact: true }).click()
+  const input = page.getByLabel('Football data pack')
+  await input.setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...pack, players: [...players, players[0]] })) })
+  await expect(page.getByText(/Duplicate player identity/)).toBeVisible()
+  await input.setInputFiles({ name: 'valid.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(pack)) })
+  await expect(page.getByRole('region', { name: 'Football data import preview' })).toContainText('22 identities')
+  await expect(page.getByRole('button', { name: 'Publish verified pack' })).toBeDisabled()
+  await page.getByLabel('I am authorised to use these records in the studio.').check()
+  await page.getByRole('button', { name: 'Publish verified pack' }).click()
+  await expect(page.getByText('Published revision browser-regression in this browser.')).toBeVisible()
+  await page.getByRole('button', { name: 'Upcoming', exact: true }).click()
+  await page.getByRole('button', { name: /Manchester City Fulham/ }).click()
+  await page.getByRole('button', { name: 'Review sourced squad XIs' }).click()
+  const proposal = page.getByRole('region', { name: 'Proposed sourced squad line-ups' })
+  await expect(proposal.locator('ol > li')).toHaveCount(22)
+  await page.getByRole('button', { name: 'Use sourced squad XIs' }).click()
+  await expect(page.locator('[data-player-id]')).toHaveCount(22)
+  await expect(page.getByRole('region', { name: 'Roster repair status' })).toHaveCount(0)
+})

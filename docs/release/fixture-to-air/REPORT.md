@@ -31,6 +31,18 @@ The protected Vercel review deployment was Ready at `16c2484`. An authenticated 
 
 The production alias was checked separately and still served `6e254064e173633a35fa5782af1f08b6c8e2afc2`.
 
+## Timed rehearsal
+
+The final timed LAN rehearsal ran from a clean archive of commit `94a622731836be1655a5ba5932304299a89228b3`. All ten checkpoints and the final Clear assertions passed. Playwright reported one passing scenario in 10.1 minutes. The environment was Node 22.22.2, macOS arm64 and Chrome 157.0.8103.40, with the football token unset and an independent viewer at 1920 × 1080 and 3840 × 2160.
+
+```sh
+npm ci
+npm run build
+STUDIO_REHEARSAL_SOAK=1 CI=1 npm run test:e2e -- --workers=1 --output=/tmp/touchline-committed-soak-results session.spec.ts
+```
+
+The four browser contexts used the explicit fictional XI for the tactical scenes. They exercised press cues, a pass and curved movement, an outage and TV reload, and presenter revocation. The producer then staged and took the independently verified United–Villa result and historical player comparison, followed by separate landscape and portrait stills. An intentionally unavailable candidate still left the decoded frame on the TV through an offline reload. The viewer then recovered the correct still, returned to the pitch, and cleared at the end. This rehearsal verifies the programme mechanics. Its tactical identities remain rehearsal data pending the rights and XI gate.
+
 ## Captures
 
 The paired editor, still and result captures use the same explicit rehearsal match and original synthetic still. The second set shows the independently checked United–Villa result and a separate board populated with synthetic QA identities. No club imagery or match photographs are included in the snapshot.
@@ -40,7 +52,7 @@ The paired editor, still and result captures use the same explicit rehearsal mat
 - Graphic workbench [before](before/result-graphic-1280.png) and [after](after/comparison-result-graphic-1280.png)
 - 1080p TV still [before](before/tv-still-1080.png) and [after](after/comparison-tv-still-1080.png)
 - 1080p TV result [before](before/tv-result-1080.png) and [after](after/comparison-tv-result-1080.png)
-- [Real fixture desk](after/real-match-1280.png), [scorebug with QA pack](after/real-fixture-qa-board-1280.png), [United–Villa at 1080p](after/real-result-1080.png) and [United–Villa at 4K](after/real-result-4k.png)
+- [Real fixture desk](after/real-match-1280.png), [scorebug with QA pack](after/real-fixture-qa-board-1280.png), [United–Villa on the independent TV during the timed rehearsal](after/real-result-1080.png) and [United–Villa at 4K](after/real-result-4k.png)
 - [Presenter landscape](../after/rehearsal-presenter-landscape.png), [presenter portrait](../after/rehearsal-presenter-portrait.png) and [4K TV still](../after/rehearsal-still-tv-4k.png)
 - [1920 × 1080 desktop editor](after/editor-1920.png), [1440 × 900 desktop editor](after/editor-1440.png), [tablet landscape](after/editor-touch-landscape.png), [tablet portrait](after/editor-touch-portrait.png), and [portrait still](after/still-portrait-1280.png)
 

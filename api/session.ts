@@ -1,6 +1,6 @@
-import { blobSessionStore } from '../server/blob-session-store'
-import { sessionService } from '../server/session-service'
-import { validStudioSnapshot } from '../server/studio-snapshot'
+import { blobSessionStore } from '../server/blob-session-store.js'
+import { sessionService } from '../server/session-service.js'
+import { validStudioSnapshot } from '../server/studio-snapshot.js'
 
 export default {
   fetch(request: Request) {

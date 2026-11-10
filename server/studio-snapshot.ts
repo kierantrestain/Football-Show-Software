@@ -1,4 +1,4 @@
-import { validateProject } from '../src/domain'
+import { validateProject } from '../src/domain.js'
 
 type RecordValue = Record<string, unknown>
 
@@ -43,6 +43,7 @@ export function validStudioSnapshot(content: RecordValue) {
       && typeof content.loop === 'boolean'
       && (content.format === '16:9' || content.format === '9:16' || content.format === 'Overlay')
       && graphic(content.graphic)
+      && (content.graphics === undefined || (Array.isArray(content.graphics) && content.graphics.length <= 20 && content.graphics.every(graphic)))
       && (image === undefined || (object(image) && typeof image.assetId === 'string' && typeof image.url === 'string'
         && (/^data:image\/(?:png|jpeg|webp);base64,/i.test(image.url) || image.url.startsWith('https://'))))
   } catch {

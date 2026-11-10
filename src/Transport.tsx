@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Clapperboard, FastForward, Gauge, Pause, Play, Plus, Repeat2, RotateCcw, SkipBack, SkipForward } from 'lucide-react'
 import type { Scene } from './domain'
 import { currentScene, switchScene, togglePlay, usePlayoutTime, type Playout } from './playback'
@@ -8,6 +9,7 @@ const stamp = (time: number) => `${String(Math.floor(time / 60)).padStart(2, '0'
 export function Transport({ playout, onChange, onAdd, onDetails }: {
   playout: Playout; onChange: (value: Playout) => void; onAdd: () => void; onDetails: () => void
 }) {
+  const [zoom, setZoom] = useState(1)
   const scene = currentScene(playout)
   const time = usePlayoutTime(playout, scene.duration)
   const playing = Boolean(playout.startedAt && (time < scene.duration || playout.loop))
@@ -34,6 +36,11 @@ export function Transport({ playout, onChange, onAdd, onDetails }: {
       </button>)}
       <IconButton label="Add scene" className="add-scene" onClick={onAdd}><Plus size={19} /></IconButton>
     </div>
-    <div className="scrubber"><FastForward size={14} /><output>{stamp(time)}</output><input aria-label="Timeline position" type="range" min={0} max={scene.duration} step={0.01} value={time} onChange={event => onChange({ ...playout, time: Number(event.target.value), startedAt: undefined })} /><span>{stamp(scene.duration)}</span></div>
+    <div className="scrubber"><FastForward size={14} /><output>{stamp(time)}</output>
+      <div className="scrub-window"><input aria-label="Timeline position" type="range" min={0} max={scene.duration} step={0.01} value={time}
+        style={{ width: `${zoom * 100}%` }} onChange={event => onChange({ ...playout, time: Number(event.target.value), startedAt: undefined })} /></div>
+      <span>{stamp(scene.duration)}</span>
+      <select aria-label="Timeline zoom" value={zoom} onChange={event => setZoom(Number(event.target.value))}><option value="1">100%</option><option value="2">200%</option><option value="4">400%</option></select>
+    </div>
   </section>
 }

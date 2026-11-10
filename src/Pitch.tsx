@@ -1,5 +1,5 @@
 import { memo, useId, useMemo, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
-import { clamp, curvePoint, evaluateScene, lerpPoint, onPitch, sideInk, teamColors, trackValue, type Player, type Point, type Scene, type TacticalObject } from './domain';
+import { clamp, curvePoint, evaluateScene, lerpPoint, objectAtFootageTime, objectOnSurface, onPitch, sideInk, teamColors, trackValue, tryMediaCalibration, type Player, type Point, type Scene, type TacticalObject } from './domain';
 
 type PitchProps = {
   scene: Scene;
@@ -9,6 +9,8 @@ type PitchProps = {
   transparent?: boolean;
   media?: boolean;
   mediaTime?: number;
+  mediaGuide?: boolean;
+  calibrationDraft?: Point[];
   className?: string;
   selected?: ReadonlySet<string>;
   draft?: TacticalObject;
@@ -151,16 +153,17 @@ function Arrowhead({ before, end, color, thickness }: { before: Point; end: Poin
     strokeWidth={thickness} strokeLinecap="round" strokeLinejoin="round" />;
 }
 
-function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1 }: {
-  object: TacticalObject; project: ProjectPoint; clean: boolean; selected: boolean; opacity: number; scale?: number;
+function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1, measurements = true }: {
+  object: TacticalObject; project: ProjectPoint; clean: boolean; selected: boolean; opacity: number; scale?: number; measurements?: boolean;
 }) {
   const { id, kind, color, dashed, curve, points } = object;
   const [a, b = a, c] = points;
   const start = project(a);
-  const end = project(b);
-  const center = project(lerpPoint(a, b, .5));
+  const last = points[points.length - 1];
+  const end = project(last);
+  const center = project(lerpPoint(a, last, .5));
   const stroke = clamp(object.thickness, .12, 4);
-  const radius = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 2);
+  const distance = Math.hypot(b.x - a.x, b.y - a.y);
   let geometry: string;
   let fill = 'none';
   let fillOpacity = 1;
@@ -176,7 +179,7 @@ function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1 
   }
 
   if (kind === 'circle' || kind === 'spotlight') {
-    geometry = path(arc(a, radius, 0, Math.PI * 2, 38), project, true);
+    geometry = path(arc(a, Math.max(distance, 2), 0, Math.PI * 2, 38), project, true);
     if (kind === 'spotlight') {
       fill = color;
       fillOpacity = .13;
@@ -201,7 +204,7 @@ function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1 
     const angleA = Math.atan2(a.y - vertex.y, a.x - vertex.x);
     const angleB = Math.atan2(b.y - vertex.y, b.x - vertex.x);
     const difference = Math.acos(clamp(Math.cos(angleB - angleA), -1, 1));
-    label = label || `${Math.round(difference * 180 / Math.PI)}°`;
+    if (measurements) label = label || `${Math.round(difference * 180 / Math.PI)}°`;
     labelAt = project(lerpPoint(vertex, lerpPoint(a, b, .5), .4));
   } else if (curve) {
     geometry = path(Array.from({ length: 29 }, (_, index) => curvePoint(a, b, curve, index / 28)), project);
@@ -209,14 +212,14 @@ function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1 
     geometry = path(points, project);
   }
 
-  if (kind === 'distance' || kind === 'compactness') label = label || `${radius.toFixed(1)} m`;
+  if (measurements && (kind === 'distance' || kind === 'compactness')) label = label || `${distance.toFixed(1)} m`;
   const arrow = object.arrowhead ?? arrowKinds.has(kind);
   return <g data-object-id={clean ? undefined : id} opacity={opacity} transform={transform} aria-label={kind}>
     {!clean && <path d={geometry} stroke="transparent" strokeWidth={Math.max(3, stroke + 1)} fill={fill === 'none' ? 'none' : 'transparent'} />}
     {selected && <path d={geometry} stroke="#fafee0" strokeOpacity=".26" strokeWidth={stroke + .8} fill="none" pointerEvents="none" />}
-    <path d={geometry} fill={fill} fillOpacity={fillOpacity} stroke={color} strokeWidth={stroke}
+    <path d={geometry} fill={fill} fillOpacity={object.fillOpacity ?? fillOpacity} stroke={color} strokeWidth={stroke}
       strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dashed ? `${stroke * 4.3} ${stroke * 3.6}` : undefined} pointerEvents="none" />
-    {arrow && (a.x !== b.x || a.y !== b.y) && <Arrowhead before={curve ? project(curvePoint(a, b, curve, .9)) : start} end={end} color={color} thickness={stroke} />}
+    {arrow && (a.x !== last.x || a.y !== last.y) && <Arrowhead before={curve ? project(curvePoint(a, b, curve, .9)) : project(points.at(-2) ?? a)} end={end} color={color} thickness={stroke} />}
     {label && <ObjectLabel {...labelAt} color={color}>{label}</ObjectLabel>}
   </g>;
 }
@@ -264,7 +267,8 @@ function PlayerMarker({ player, project, scene, selected, clean, onSelect, time 
 }
 
 function GraphicHandles({ object, project }: { object: TacticalObject; project: ProjectPoint }) {
-  const handles = object.points.map((point, index) => ({ point, id: String(index) }));
+  const interval = Math.max(1, Math.ceil(object.points.length / 10));
+  const handles = object.points.flatMap((point, index) => index % interval === 0 || index === object.points.length - 1 ? [{ point, id: String(index) }] : []);
   if (object.curve) handles.push({ point: object.curve, id: 'curve' });
   return <g>
     {object.curve && <path d={path([object.points[0], object.curve, object.points[1] ?? object.points[0]], project)}
@@ -280,7 +284,7 @@ function GraphicHandles({ object, project }: { object: TacticalObject; project: 
 }
 
 export function Pitch({
-  scene, time = 0, cueIndex, clean = false, transparent = false, media = false, mediaTime, className, selected,
+  scene, time = 0, cueIndex, clean = false, transparent = false, media = false, mediaTime, mediaGuide, calibrationDraft, className, selected,
   draft, style, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPlayerSelect,
 }: PitchProps) {
   const gradient = useId().replace(/[^a-zA-Z0-9_-]/g, '');
@@ -291,18 +295,27 @@ export function Pitch({
   const viewBox = media ? [0, 0, 105, 68] : getViewBox(effective);
   const ball = project(effective.ball);
   const footageTime = mediaTime ?? scene.media?.frame ?? time;
+  const alignment = scene.media?.alignment;
+  const guide = useMemo(() => media && mediaGuide && !clean ? tryMediaCalibration(alignment) : undefined, [media, mediaGuide, clean, alignment]);
   return <svg xmlns="http://www.w3.org/2000/svg" viewBox={viewBox.join(' ')} className={className}
     style={{ display: 'block', width: '100%', height: '100%', fontFamily: 'Inter, Arial, sans-serif', ...style }}
     preserveAspectRatio={media ? 'none' : 'xMidYMid meet'}
     aria-label={media ? 'Media telestration canvas' : 'Football tactics pitch'}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
     {!transparent && !media && <Field project={project} theme={effective.theme} gradientId={`pitch-light-${gradient}`} />}
-    {effective.objects.filter((object) => !object.hidden && (!media || (
-      (object.mediaIn === undefined || footageTime >= object.mediaIn) &&
-      (object.mediaOut === undefined || footageTime <= object.mediaOut)
-    ))).map((object) => (
+    {guide && <path data-media-guide="true" d={fieldMarkings.map((line) => path(line, guide.toMedia)).join(' ')}
+      fill="none" stroke="#defb50" strokeOpacity=".72" strokeWidth=".25" strokeDasharray=".7 .36" pointerEvents="none" />}
+    {media && calibrationDraft && !clean && <g data-calibration-draft="true" pointerEvents="none">
+      <path d={path(calibrationDraft, project)} stroke="#defb50" strokeWidth=".31" fill="none" strokeDasharray=".9 .4" />
+      {calibrationDraft.map((point, index) => <g key={index} transform={`translate(${coords(point)})`}>
+        <circle r="1.45" fill="#defb50" stroke="#132416" strokeWidth=".22" />
+        <text fontWeight="750" fontSize="1.55" textAnchor="middle" dominantBaseline="middle" fill="#132416">{index + 1}</text>
+      </g>)}
+    </g>}
+    {effective.objects.filter((object) => !object.hidden && objectOnSurface(object, scene, media) && (!media || objectAtFootageTime(object, footageTime))).map((object) => (
       trackValue(effective.tracks, object.id, 'visibility', time, 1) !== 0 &&
       <TacticalGraphic key={object.id} object={object} project={project} clean={clean}
+        measurements={!media}
         selected={Boolean(selected?.has(object.id)) && !clean}
         opacity={trackValue(effective.tracks, object.id, 'opacity', time, object.opacity)}
         scale={trackValue(effective.tracks, object.id, 'scale', time, 1)} />
@@ -315,8 +328,8 @@ export function Pitch({
       <circle r=".67" fill="#f9faf2" stroke="#0c1512" strokeWidth=".12" />
       <path d="M0-.26 .25-.08 .15.24 -.15.24 -.25-.08Z" fill="#27352e" />
     </g>}
-    {draft && !clean && <TacticalGraphic object={draft} project={project} clean selected={false} opacity={.88} />}
-    {!clean && effective.objects.filter((object) => !object.hidden && !object.locked && selected?.has(object.id))
+    {draft && !clean && <g pointerEvents="none"><TacticalGraphic object={draft} project={project} clean selected={false} opacity={.88} measurements={!media} /></g>}
+    {!clean && effective.objects.filter((object) => !object.hidden && !object.locked && objectOnSurface(object, scene, media) && selected?.has(object.id))
       .map((object) => <GraphicHandles key={object.id} object={object} project={project} />)}
   </svg>;
 }

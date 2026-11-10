@@ -45,3 +45,12 @@ npm run test:e2e
 Browser checks use desktop Chrome by default. Set `PLAYWRIGHT_CHANNEL=chromium` and install bundled Chromium with `npx playwright install chromium` on systems without Chrome.
 
 See [Product](PRODUCT.md), [Architecture](ARCHITECTURE.md), [Design system](DESIGN.md), and [Testing](TESTING.md).
+
+### Data provenance
+
+The official archive uses the Premier League's final 2023/24 records and Manchester City's season report. The live adapter requests competition matches, tables and match detail from football-data.org v4. The application distinguishes fictional demo rows, official archive records and provider responses.
+
+- [Premier League 2023/24 Fan XI and season figures](https://www.premierleague.com/en/news/4029023)
+- [Premier League final table archive](https://resources.premierleague.pulselive.com/premierleague/document/2025/07/24/99839920-d274-42aa-a2ac-e5612b4f6c61/PL_Handbook_25-26_Digital_24.07.pdf)
+- [Manchester City 2023/24 season report](https://www.mancity.com/annualreport2024/mens-team/)
+- [football-data.org coverage](https://www.football-data.org/coverage), [plans](https://www.football-data.org/pricing), and [match endpoint](https://docs.football-data.org/general/v4/match.html)

@@ -82,6 +82,7 @@
   min-height: 0;
   background: #111817;
 }
+.tac-monitor.has-calibration { grid-template-rows: 42px minmax(0, 1fr) auto 37px; }
 .tac-monitor-bar, .tac-monitor-footer, .tac-inspector-heading, .tac-inspector-footer {
   display: flex;
   align-items: center;
@@ -101,6 +102,8 @@
 .tac-monitor-title i, .tac-current-cue i, .tac-inspector-footer i { width: 6px; height: 6px; border-radius: 50%; background: var(--tac-accent); flex: 0 0 auto; }
 .tac-monitor-title i { box-shadow: 0 0 8px #dbfb4840; }
 .tac-monitor-controls { gap: 6px; }
+.tac-monitor-controls .button { min-height: 27px; padding-inline: 7px; }
+.tac-monitor-controls .button svg { width: 13px; height: 13px; }
 .tac-monitor-controls > button:not(.tac-icon) {
   background: #242a26;
   color: #cdd4cc;
@@ -193,6 +196,31 @@
   z-index: 2;
 }
 .tac-tool-tip span { color: var(--tac-accent); font-weight: 680; }
+.tac-calibration {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 6px 9px;
+  color: #e4ede2;
+  background: #111b15f2;
+  border-top: 1px solid #39473a;
+}
+.tac-calibration > div { display: grid; gap: 2px; padding-inline: 3px 6px; }
+.tac-calibration b { font-size: 11px; }
+.tac-calibration span { color: #b2c2b4; font-size: 10px; line-height: 1.4; }
+.tac-calibration button {
+  background: #252f25;
+  border: 1px solid #4b5a48;
+  border-radius: 4px;
+  color: #e4ede2;
+  min-height: 29px;
+  padding-inline: 8px;
+  font-size: 10px;
+  font-weight: 650;
+}
+.tac-calibration button:hover { background: #374636; }
+.tac-calibration button.tac-map-action { background: var(--tac-accent); color: #171e12; border-color: var(--tac-accent); }
 .tac-monitor-footer { gap: 10px; border-top: 1px solid var(--tac-line); }
 .tac-team-key { gap: 6px; white-space: nowrap; letter-spacing: .05em; color: #e3e9e1; }
 .tac-team-key i, .tac-team-switch i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 2px; }
@@ -228,7 +256,7 @@
 .tac-tabs button.is-active::after { position: absolute; content: ""; height: 2px; background: var(--tac-accent); inset: auto 6px -1px; }
 .tac-tabs small { color: #adb9ae; background: #303831; padding: 0 4px; border-radius: 3px; font-size: 9px; }
 .tac-inspector-body { overflow-y: auto; scrollbar-width: thin; scrollbar-color: #3b4a40 transparent; }
-.tac-inspector-section { display: grid; align-content: start; gap: 9px; padding: 13px 13px 12px; border-bottom: 1px solid var(--tac-line); }
+.tac-inspector-section { display: grid; align-content: start; gap: 8px; padding: 11px 13px 10px; border-bottom: 1px solid var(--tac-line); }
 .tac-inspector-section:last-child { border-bottom: 0; }
 .tac-eyebrow {
   display: flex;
@@ -329,8 +357,9 @@
   .tac-tabs { padding-inline: 6px; gap: 2px; }
   .tac-tabs button { padding-inline: 7px; }
 }
-@media (max-width: 750px) {
-  .tactics-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(300px, 1fr) auto; flex: none; }
+@media (max-width: 750px), (max-width: 900px) and (orientation: portrait) {
+  .tactics-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; flex: none; }
+  .tac-monitor { min-height: clamp(340px, 66vw, 570px); }
   .tac-rail { flex-direction: row; padding: 4px 7px; border-right: 0; border-bottom: 1px solid var(--tac-line); gap: 2px; flex-wrap: wrap; }
   .tac-rail-end { margin: 0 0 0 auto; }
   .tac-tool-group { padding: 0 0 0 4px; margin: 0 0 0 2px; border-top: 0; border-left: 1px solid #2c332f; }
@@ -346,6 +375,7 @@
   .tac-rail .tac-icon { width: 28px; }
   .tac-tool-group { padding-left: 2px; }
   .tac-monitor-title { font-size: 8px; letter-spacing: .04em; }
+  .tac-monitor-controls .button span { display: none; }
   .tac-monitor-footer { gap: 6px; }
   .tac-pitch-meta { font-size: 8px; }
 }

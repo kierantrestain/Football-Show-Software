@@ -93,6 +93,7 @@ test('browser screenshots cover editing, studio home and local television', asyn
   for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     await page.setViewportSize({ width, height })
     await expect(page.locator('[data-player-id]')).toHaveCount(22)
+    await page.evaluate(async () => { await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
     await page.screenshot({ path: testInfo.outputPath(`editor-${width}.png`), animations: 'disabled' })
   }
   await page.getByRole('button', { name: 'Studio', exact: true }).click()
@@ -103,4 +104,80 @@ test('browser screenshots cover editing, studio home and local television', asyn
   await expect(page.getByRole('button')).toHaveCount(0)
   await expect(page.locator('[data-player-id]')).toHaveCount(22)
   await page.screenshot({ path: testInfo.outputPath('broadcast-1920.png'), animations: 'disabled' })
+})
+
+test('import, seek, freeze and annotate browser-compatible video', async ({ page }) => {
+  await page.goto('/')
+  const clip = await page.evaluate(async () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 480; canvas.height = 270
+    const context = canvas.getContext('2d')!
+    const stream = canvas.captureStream(15)
+    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' })
+    const chunks: Blob[] = []
+    const stopped = new Promise<void>(resolve => { recorder.onstop = () => resolve() })
+    recorder.ondataavailable = event => chunks.push(event.data)
+    recorder.start()
+    for (let i = 0; i < 12; i++) {
+      context.fillStyle = '#193c30'; context.fillRect(0, 0, 480, 270)
+      context.fillStyle = '#dfeddf'; context.fillRect(70 + i * 14, 100, 15, 15)
+      await new Promise(resolve => setTimeout(resolve, 67))
+    }
+    recorder.stop()
+    await stopped
+    stream.getTracks().forEach(track => track.stop())
+    return [...new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer())]
+  })
+  await page.locator('input[aria-label="Import media"]').setInputFiles({ name: 'demo-clip.webm', mimeType: 'video/webm', buffer: Buffer.from(clip) })
+  const footage = page.locator('video.analysis-media')
+  await expect(footage).toBeVisible()
+  await page.getByRole('button', { name: 'Play footage' }).click()
+  await expect(page.getByRole('button', { name: 'Pause footage' })).toBeVisible()
+  await page.getByRole('button', { name: 'Pause footage' }).click()
+  await page.getByRole('button', { name: 'Forward one frame (30 fps)' }).click()
+  await page.getByRole('button', { name: 'Save frame' }).click()
+  await page.getByRole('button', { name: 'Arrow', exact: true }).click()
+  const pitch = page.getByLabel('Media telestration canvas')
+  const box = await pitch.boundingBox()
+  if (!box) throw new Error('No media canvas.')
+  await page.mouse.move(box.x + box.width * .28, box.y + box.height * .35)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * .59, box.y + box.height * .57, { steps: 6 })
+  await page.mouse.up()
+  await expect(pitch.locator('[aria-label="arrow"]')).toHaveCount(1)
+})
+
+test('encode a real WebM animation and a transparent 4K PNG', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /Break the Lines/ }).click()
+  await page.getByRole('button', { name: 'Scene settings' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Scene settings' })
+  await dialog.getByRole('spinbutton', { name: 'Duration in seconds' }).fill('2')
+  await dialog.getByRole('button', { name: 'Save scene' }).click()
+  await page.getByRole('button', { name: 'Export', exact: true }).click()
+  await page.getByRole('combobox', { name: 'File type' }).selectOption('webm')
+  let completed = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export scene' }).click()
+  const animation = await readFile((await (await completed).path())!)
+  expect(animation.length).toBeGreaterThan(1024)
+  expect(animation.subarray(0, 4).toString('hex')).toBe('1a45dfa3')
+  const formats = page.getByRole('combobox', { name: 'File type' })
+  if (await formats.locator('option[value="mp4"]').count()) {
+    await formats.selectOption('mp4')
+    completed = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Export scene' }).click()
+    const mp4 = await readFile((await (await completed).path())!)
+    expect(mp4.length).toBeGreaterThan(1024)
+    expect(mp4.subarray(4, 8).toString()).toBe('ftyp')
+    console.info('MP4 MediaRecorder encoder verified.')
+  }
+  await formats.selectOption('png')
+  await page.getByRole('combobox', { name: 'Resolution' }).selectOption('4K')
+  await page.getByRole('checkbox', { name: 'Transparent overlay' }).check()
+  completed = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export scene' }).click()
+  const png = await readFile((await (await completed).path())!)
+  expect(png.readUInt32BE(16)).toBe(3840)
+  expect(png.readUInt32BE(20)).toBe(2160)
+  expect(png[25]).toBe(6)
 })

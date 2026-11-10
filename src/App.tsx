@@ -10,6 +10,7 @@ import { OutputRoute, PresenterConsole, RemoteRoute } from './Presentation'
 import { useEditorMedia } from './MediaPanel'
 import { exportProject, importProject, storage } from './storage'
 import { exportScene } from './export'
+import { sharedFrame } from './mediaDecode'
 import { createSession, useSession } from './session'
 import type { SessionCredentials } from './session-types'
 import { currentScene, initialPlayout, setLocalPreview, switchCue, switchScene, timeAt, togglePlay, usePlayoutTime, type Playout } from './playback'
@@ -18,6 +19,7 @@ import { IconButton, Modal } from './ui'
 const DEMO = initialPlayout(sampleProject)
 const credentialsKey = 'touchline-producer-sessions'
 const activeKey = 'touchline-active-project'
+const graphicsKey = (id: string) => `touchline-graphics-${id}`
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -47,8 +49,8 @@ export function App() {
     return () => window.removeEventListener('popstate', pop)
   }, [])
   const navigate = useCallback((target: string) => {
-    if (pathName() !== target) history.pushState({}, '', target)
-    setPath(target)
+    if (location.pathname + location.search !== target) history.pushState({}, '', target)
+    setPath(pathName())
     window.scrollTo(0, 0)
   }, [])
   const [, surface, id] = path.split('/')
@@ -57,13 +59,14 @@ export function App() {
   return <Boundary><Studio path={path} navigate={navigate} /></Boundary>
 }
 
-function EditorCanvas({ playout, onChange, onError }: { playout: Playout; onChange: (scene: Scene) => void; onError: (error: unknown) => void }) {
+function EditorCanvas({ playout, onChange, onReconstruct, onError }: {
+  playout: Playout; onChange: (scene: Scene) => void; onReconstruct: (scene: Scene) => void; onError: (error: unknown) => void
+}) {
   const scene = currentScene(playout)
   const time = usePlayoutTime(playout, scene.duration)
   const { media, controls, upload, mediaTime } = useEditorMedia(scene, onChange, onError)
   return <div className="editor-canvas">
-    <div className="canvas-caption"><span className="eyebrow"><i /> Tactical workspace</span><div>{upload}<span className="technical">105 × 68 M</span></div></div>
-    <TacticsEditor key={scene.id} scene={scene} match={playout.project.match} time={time} cueIndex={playout.cue} onChange={onChange} media={media || undefined} mediaTime={mediaTime} transparent={!!media} />
+    <TacticsEditor key={scene.id} scene={scene} match={playout.project.match} time={time} cueIndex={playout.cue} onChange={onChange} media={media || undefined} mediaTime={mediaTime} mediaControl={upload} onReconstruct={onReconstruct} transparent={!!media} />
     {controls}
   </div>
 }
@@ -96,7 +99,7 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     const id = route?.[1] ?? stored(activeKey, sampleProject.id)
     void storage.project(id).then(entry => {
       if (!active) return
-      if (entry) setPlayout(initialPlayout(validateProject(entry.project)))
+      if (entry) setPlayout({ ...initialPlayout(validateProject(entry.project)), graphics: stored(graphicsKey(id), []) })
       else if (route && id !== sampleProject.id) setNotice('That production is not saved on this device. The demo is open.')
     }).catch(notify).finally(() => { if (active) setReady(true) })
     return () => { active = false }
@@ -124,7 +127,10 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     setSave('Saving…')
     setPast(items => [...items.slice(-79), project])
     setFuture([])
-    setPlayout(value => ({ ...value, project: next, sceneId }))
+    setPlayout(value => {
+      const target = next.scenes.find(item => item.id === sceneId) ?? next.scenes[0]
+      return { ...value, project: next, sceneId: target.id, cue: Math.max(0, Math.min(value.cue, target.cues.length - 1)) }
+    })
   }
   function commitScene(next: Scene) {
     commit({ ...project, scenes: project.scenes.map(item => item.id === next.id ? next : item) })
@@ -149,7 +155,7 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
   }
   function open(next: Project) {
     setSave('Saving…')
-    setPast([]); setFuture([]); setPlayout(initialPlayout(next))
+    setPast([]); setFuture([]); setPlayout({ ...initialPlayout(next), graphics: stored(graphicsKey(next.id), []) })
     navigate(`/editor/${next.id}`)
   }
   function copyProject(entry: Project, label = 'copy') {
@@ -160,8 +166,15 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     commit({ ...project, scenes: [...project.scenes, next] }, next.id)
     setPlayout(value => switchScene(value, next.id))
   }
+  function reconstruct(sceneFromFootage: Scene) {
+    commit({ ...project, scenes: [...project.scenes, sceneFromFootage] }, sceneFromFootage.id)
+    setPlayout(value => switchScene(value, sceneFromFootage.id))
+    setNotice('Mapped markings saved in a reconstructed scene.')
+  }
   function queue(graphic: GraphicSpec) {
-    const next = { ...playout, graphic }
+    const graphics = [graphic, ...(playout.graphics ?? []).filter(item => item.id !== graphic.id)].slice(0, 20)
+    const next = { ...playout, graphic, graphics }
+    remember(graphicsKey(project.id), graphics)
     setPlayout(next)
     setLocalPreview(next)
     if (session) {
@@ -195,23 +208,12 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
   }
   function launchLocal() { setLocalPreview(playout); window.open('/output/local', '_blank', 'noopener,noreferrer') }
   async function sharedMedia(content: Playout): Promise<Playout> {
-    const item = currentScene(content).media
-    if (!item || item.type !== 'image') return { ...content, sharedImage: undefined }
-    const asset = await storage.asset(item.assetId)
-    if (!asset) return { ...content, sharedImage: undefined }
-    const image = await createImageBitmap(asset.blob)
-    try {
-      const scale = Math.min(1, 1000 / Math.max(image.width, image.height))
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale)
-      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
-      return { ...content, sharedImage: { assetId: item.assetId, url: canvas.toDataURL('image/jpeg', .78) } }
-    } finally { image.close() }
+    return { ...content, sharedImage: await sharedFrame(currentScene(content).media) }
   }
   async function stage(content = playout) {
     try {
       const success = await desk.send({ type: 'stage', content: await sharedMedia(content) })
-      if (success) setNotice('Preview staged. The on-air frame is held.')
+      if (success) setNotice('Preview staged separately from the on-air feed.')
     } catch (error) { notify(error) }
   }
   async function start() {
@@ -298,14 +300,14 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
           </div>
           <div className="ribbon-scene"><span className="status-tag"><i /> {scene.classification}</span><small>{project.match.source}</small></div>
         </section>
-        <EditorCanvas playout={playout} onChange={commitScene} onError={notify} />
+        <EditorCanvas key={scene.id} playout={playout} onChange={commitScene} onReconstruct={reconstruct} onError={notify} />
         <Transport playout={playout} onChange={setPlayout} onAdd={() => addScene()} onDetails={() => setDialog('scene')} />
       </main>
     </>}
     {path === '/studio' && <StudioHome project={project} sessionId={session?.id} onOpen={open} onNew={() => named('new')} onDuplicate={copyProject}
       onImport={() => importFile.current?.click()} onTemplate={template => { addScene(template.scene); navigate(`/editor/${project.id}`) }}
-      onRestore={snapshot => copyProject(snapshot.project, 'restored')} onData={() => navigate('/data')} onGraphics={() => navigate('/graphics')} onPresent={present} onError={notify} />}
-    {path === '/data' && <DataCenter onLoadTactics={loadMatch} onQueueGraphic={queue} />}
+      onRestore={snapshot => copyProject(snapshot.project, 'restored')} onData={matchId => navigate(matchId ? `/data?match=${encodeURIComponent(matchId)}` : '/data')} onGraphics={() => navigate('/graphics')} onPresent={present} onError={notify} />}
+    {path === '/data' && <DataCenter initialMatchId={new URLSearchParams(location.search).get('match') ?? undefined} onLoadTactics={loadMatch} onQueueGraphic={queue} />}
     {path === '/graphics' && <GraphicsLibrary onQueueGraphic={queue} />}
     {path !== '/studio' && path !== '/data' && path !== '/graphics' && !editor && <main className="recovery"><h1>Studio route unavailable</h1><button className="button primary" onClick={() => navigate('/')}>Open editor</button></main>}
     {dialog === 'scene' && <SceneSettings scene={scene} index={sceneIndex} count={project.scenes.length} onChange={commitScene} onClose={() => setDialog(null)}

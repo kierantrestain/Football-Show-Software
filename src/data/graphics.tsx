@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Activity, ArrowUpRight, BarChart3, Captions, ChartNoAxesColumnIncreasing, ChevronDown, CircleDot, ClipboardList, GalleryHorizontalEnd, LayoutTemplate, ListOrdered, Play, ScanLine, Swords, Target, Trophy, Users } from 'lucide-react'
+import { Activity, ArrowUpRight, BarChart3, Captions, ChartNoAxesColumnIncreasing, CircleDot, ClipboardList, GalleryHorizontalEnd, LayoutTemplate, ListOrdered, Play, Save, ScanLine, Swords, Target, Trophy, Users } from 'lucide-react'
 import type { GraphicKind, GraphicSpec, Match, Team } from './model'
 import { displayDate, scoreText } from './model'
 import { demoMatches, demoStandings, officialPlayers } from './fixtures'
@@ -9,21 +9,24 @@ export function TeamMark({ team, large = false }: { team: Pick<Team, 'shortName'
   return <span className={large ? 'data-team-mark is-large' : 'data-team-mark'} style={{ '--team-color': team.color } as React.CSSProperties} aria-hidden="true"><span>{team.shortName}</span></span>
 }
 export function matchGraphic(match: Match, kind?: GraphicKind): GraphicSpec {
+  const status = match.status
+  const title = status === 'finished' ? 'Full-time result' : status === 'live' ? 'Match score' : status === 'postponed' ? 'Fixture status' : 'Match preview'
+  const detail = status === 'finished' ? 'Full time' : status === 'live' ? 'In play' : status === 'postponed' ? 'Postponed' : displayDate(match.kickoff, true)
   return {
     id: `graphic-${match.id}-${kind || match.status}`,
     kind: kind || (match.score ? 'result' : 'preview'),
-    title: match.score ? 'Full-time result' : 'Match preview',
+    title,
     subtitle: `${match.competition} · ${match.season}${match.venue ? ` · ${match.venue}` : ''}`,
     source: match.source.label,
     teams: [match.home, match.away].map(({ name, shortName, color, formation }) => ({ name, shortName, color, formation })),
-    score: match.score, detail: match.score ? 'Full time' : displayDate(match.kickoff, true),
+    score: match.score, detail,
   }
 }
 export function lineupGraphic(match: Match, side: 'home' | 'away'): GraphicSpec {
   const team = match[side]
   return {
     id: `graphic-${match.id}-${side}-xi`, kind: 'lineup',
-    title: team.name, subtitle: `Starting XI · ${team.formation || 'Formation unavailable'} · ${match.competition}`,
+    title: team.name, subtitle: `${match.status === 'scheduled' && match.source.kind === 'demo' ? 'Expected XI' : 'Starting XI'} · ${team.formation || 'Formation unavailable'} · ${match.competition}`,
     source: match.source.label, teams: [team], lineup: team.players,
   }
 }
@@ -105,46 +108,74 @@ export function BroadcastGraphic({ graphic }: { graphic: GraphicSpec }) {
   </div>
 }
 
+const draftKey = 'touchline:graphic-templates:v1'
+type SavedGraphics = Partial<Record<GraphicKind, GraphicSpec>>
+function readDrafts(): SavedGraphics {
+  try {
+    const stored = JSON.parse(localStorage.getItem(draftKey) || '{}') as SavedGraphics | null
+    return stored && typeof stored === 'object' ? stored : {}
+  } catch { return {} }
+}
 export function GraphicsLibrary({ onQueueGraphic }: { onQueueGraphic: (graphic: GraphicSpec) => void }) {
   const [kind, setKind] = useState<GraphicKind>('result')
-  const [draft, setDraft] = useState(() => exampleGraphic('result'))
-  const [queued, setQueued] = useState(false)
+  const [saved, setSaved] = useState(readDrafts)
+  const [draft, setDraft] = useState(() => saved.result || exampleGraphic('result'))
+  const [status, setStatus] = useState('')
   useEffect(() => {
-    if (!queued) return
-    const timeout = window.setTimeout(() => setQueued(false), 2500)
+    if (!status) return
+    const timeout = window.setTimeout(() => setStatus(''), 3000)
     return () => window.clearTimeout(timeout)
-  }, [queued])
+  }, [status])
   const choose = (next: GraphicKind) => {
     setKind(next)
-    setDraft(exampleGraphic(next))
-    setQueued(false)
+    setDraft(saved[next] || exampleGraphic(next))
+    setStatus('')
+  }
+  const save = () => {
+    const next = { ...saved, [kind]: draft }
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(next))
+      setSaved(next)
+      setStatus('Template saved in this browser')
+    } catch {
+      setStatus('Browser storage could not save this template')
+    }
   }
   return <div className="desk-root graphics-desk">
     <header className="desk-heading"><div><span className="desk-eyebrow"><LayoutTemplate size={14} /> PRODUCTION / GRAPHICS</span><h1>Graphics library</h1></div><span className="desk-indicator">15 templates</span></header>
     <div className="graphic-library-layout">
       <aside className="graphic-template-list" aria-label="Graphic templates">
-        <div className="desk-section-label">TEMPLATES <ChevronDown size={13} /></div>
-        {templates.map(template => <button key={template.kind} type="button" className={template.kind === kind ? 'active' : ''} onClick={() => choose(template.kind)}>
-          <template.icon size={17} /><span>{template.label}</span>
+        <div className="desk-section-label">TEMPLATES</div>
+        {templates.map(template => <button key={template.kind} type="button" className={template.kind === kind ? 'active' : ''} aria-label={template.label} aria-pressed={template.kind === kind} onClick={() => choose(template.kind)}>
+          <template.icon size={17} /><span>{template.label}</span>{saved[template.kind] && <i aria-hidden="true" title="Saved custom template" />}
         </button>)}
       </aside>
       <section className="graphic-preview-panel">
         <div className="desk-panel-head"><div><span className="desk-eyebrow">PREVIEW MONITOR</span><h2>{templates.find(template => template.kind === kind)?.label}</h2></div><span className="desk-indicator">16:9</span></div>
-        <BroadcastGraphic graphic={draft} />
-        <div className="graphic-edit-grid">
-          <label>Title <input maxLength={80} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
-          <label>Subtitle <input maxLength={100} value={draft.subtitle} onChange={event => setDraft({ ...draft, subtitle: event.target.value })} /></label>
-          <label>Source <input maxLength={100} value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
-          {draft.label !== undefined && <label>Label <input maxLength={60} value={draft.label} onChange={event => setDraft({ ...draft, label: event.target.value })} /></label>}
-          {draft.value !== undefined && <label>Display value <input maxLength={12} value={draft.value} onChange={event => setDraft({ ...draft, value: event.target.value })} /></label>}
-          {draft.detail !== undefined && <label>Detail <input maxLength={100} value={draft.detail} onChange={event => setDraft({ ...draft, detail: event.target.value })} /></label>}
-          {draft.score && <label className="graphic-edit-score">Score <span>
-            <input aria-label="Home score" type="number" min="0" max="99" value={draft.score[0]} onChange={event => setDraft({ ...draft, score: [Math.max(0, Math.min(99, Number(event.target.value))), draft.score![1]] })} />
-            <input aria-label="Away score" type="number" min="0" max="99" value={draft.score[1]} onChange={event => setDraft({ ...draft, score: [draft.score![0], Math.max(0, Math.min(99, Number(event.target.value)))] })} />
-          </span></label>}
-        </div>
-        <div className="desk-action-row"><span role="status">{queued ? 'Added to studio preview' : templates.find(template => template.kind === kind)?.desc}</span>
-          <button className="desk-primary" type="button" disabled={!draft.title.trim()} onClick={() => { onQueueGraphic({ ...draft, id: `graphic-${globalThis.crypto?.randomUUID?.() || Date.now()}` }); setQueued(true) }}>Queue to preview <ArrowUpRight size={16} /></button>
+        <div className="graphic-workbench">
+          <BroadcastGraphic graphic={draft} />
+          <div className="graphic-inspector">
+            <span className="desk-eyebrow">GRAPHIC DETAILS</span>
+            <div className="graphic-edit-grid">
+              <label>Title <input maxLength={80} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
+              <label>Subtitle <input maxLength={100} value={draft.subtitle} onChange={event => setDraft({ ...draft, subtitle: event.target.value })} /></label>
+              <label>Source <input maxLength={100} value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
+              {draft.label !== undefined && <label>Label <input maxLength={60} value={draft.label} onChange={event => setDraft({ ...draft, label: event.target.value })} /></label>}
+              {draft.value !== undefined && <label>Display value <input maxLength={12} value={draft.value} onChange={event => setDraft({ ...draft, value: event.target.value })} /></label>}
+              {draft.detail !== undefined && <label>Detail <input maxLength={100} value={draft.detail} onChange={event => setDraft({ ...draft, detail: event.target.value })} /></label>}
+              {draft.score && <label className="graphic-edit-score">Score <span>
+                <input aria-label="Home score" type="number" min="0" max="99" value={draft.score[0]} onChange={event => setDraft({ ...draft, score: [Math.max(0, Math.min(99, Number(event.target.value))), draft.score![1]] })} />
+                <input aria-label="Away score" type="number" min="0" max="99" value={draft.score[1]} onChange={event => setDraft({ ...draft, score: [draft.score![0], Math.max(0, Math.min(99, Number(event.target.value)))] })} />
+              </span></label>}
+            </div>
+            <div className="desk-action-row"><span role="status">{status || templates.find(template => template.kind === kind)?.desc}</span>
+              <button className="desk-primary" type="button" disabled={!draft.title.trim()} onClick={() => {
+                onQueueGraphic({ ...draft, id: `graphic-${globalThis.crypto?.randomUUID?.() || Date.now()}` })
+                setStatus('Added to studio preview')
+              }}>Queue to preview <ArrowUpRight size={16} /></button>
+              <button className="desk-secondary" type="button" disabled={!draft.title.trim()} onClick={save}><Save size={14} /> Save template</button>
+            </div>
+          </div>
         </div>
       </section>
     </div>

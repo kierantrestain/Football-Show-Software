@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, CircleStop, Clapperboard, Copy, ExternalLink, Flag, MonitorPlay, Pause, Play, Radio, RotateCcw, Shield, WifiOff } from 'lucide-react'
 import QRCode from 'qrcode'
 import { Pitch } from './Pitch'
@@ -17,20 +17,33 @@ export function BroadcastFrame({ content, heldAt, sceneOnly = false }: { content
   const shared = scene.media && content.sharedImage?.assetId === scene.media.assetId ? content.sharedImage.url : undefined
   const media = shared ?? localMedia
   const video = useRef<HTMLVideoElement>(null)
+  const [dimensions, setDimensions] = useState<{ url: string; ratio: number }>()
   useEffect(() => {
     if (video.current && scene.media?.frame !== undefined) video.current.currentTime = scene.media.frame
   }, [media, scene.media?.frame])
-  if (content.graphic && !sceneOnly) return <div className="broadcast-graphic-stage"><BroadcastGraphic graphic={content.graphic} /></div>
-  const transparent = content.format === 'Overlay' || !!media
+  if (content.graphic && !sceneOnly) return <div className={`broadcast-graphic-stage ${content.format === '9:16' ? 'portrait' : ''}`}>
+    <BroadcastGraphic graphic={content.graphic} />
+    {content.pip && <div className="air-pip"><BroadcastFrame content={{ ...content, format: '16:9' }} heldAt={heldAt} sceneOnly /></div>}
+  </div>
+  const overlay = content.format === 'Overlay'
+  const showMedia = !overlay && !!media
+  const ratio = dimensions?.url === media ? dimensions?.ratio : undefined
   return <section className={`broadcast-frame ${content.format === 'Overlay' ? 'transparent' : ''} ${content.format === '9:16' ? 'portrait' : ''}`} aria-label="Broadcast frame">
     {content.format !== 'Overlay' && !sceneOnly && <div className="air-score">
       <span className="air-team home">{content.project.match.homeShort}</span><b>{content.project.match.score || 'v'}</b><span className="air-team away">{content.project.match.awayShort}</span>
     </div>}
     <div className="air-pitch" key={scene.id} data-transition={scene.transition}>
-      {content.format !== 'Overlay' && media && (shared || scene.media?.type === 'image'
-        ? <img src={media} alt="Match analysis still" />
-        : <video ref={video} src={media} muted playsInline preload="auto" onLoadedMetadata={event => { event.currentTarget.currentTime = scene.media?.frame ?? 0 }} />)}
-      <Pitch scene={scene} time={time} cueIndex={content.cue} clean transparent={transparent} media={!!scene.media && (content.format === 'Overlay' || !!media)} />
+      {showMedia && media ? <div className="air-footage" style={{ '--footage-ratio': ratio ?? 16 / 9 } as CSSProperties}>
+        {shared || scene.media?.type === 'image' ? <img src={media} alt="Match analysis still" onLoad={event => {
+          const image = event.currentTarget
+          setDimensions({ url: media, ratio: image.naturalWidth / image.naturalHeight })
+        }} /> : <video ref={video} src={media} muted playsInline preload="auto" onLoadedMetadata={event => {
+          const clip = event.currentTarget
+          clip.currentTime = scene.media?.frame ?? 0
+          setDimensions({ url: media, ratio: clip.videoWidth / clip.videoHeight })
+        }} />}
+        <Pitch scene={scene} time={time} cueIndex={content.cue} clean media />
+      </div> : <Pitch scene={scene} time={time} cueIndex={content.cue} clean transparent={overlay} media={overlay && !!scene.media} /> }
     </div>
     {content.format !== 'Overlay' && !sceneOnly && <div className="air-title">
       <span>{content.project.match.competition} <i /> {content.project.match.source}</span>
@@ -80,7 +93,7 @@ export function SessionLinks({ id, invites, onClose }: { id: string; invites: Re
     )}</div>
     <div className="qr-frame">{qr && <img src={qr} width="230" height="230" alt={`Join as ${role}`} />}</div>
     <label className="form-field">Secure link<input aria-label="Secure link" value={url} readOnly onFocus={event => event.currentTarget.select()} /></label>
-    <div className="modal-actions"><a className="button quiet" target="_blank" rel="noreferrer" href={url}><ExternalLink size={15} /> Open link</a><button className="button primary" onClick={() => void copyLink(url).then(() => setCopied('Copied')).catch(error => setCopied(String(error.message)))}><Copy size={15} /> {copied || 'Copy link'}</button></div>
+    <div className="modal-actions">{role === 'viewer' && <a className="button quiet" target="_blank" rel="noreferrer" href={sessionUrl(`/remote/${id}`, invites.viewer)}>Read-only preview</a>}<a className="button quiet" target="_blank" rel="noreferrer" href={url}><ExternalLink size={15} /> Open link</a><button className="button primary" onClick={() => void copyLink(url).then(() => setCopied('Copied')).catch(error => setCopied(String(error.message)))}><Copy size={15} /> {copied || 'Copy link'}</button></div>
   </Modal>
 }
 
@@ -124,7 +137,7 @@ export function PresenterConsole({ fallback, credentials, remote = false, onChan
   }
   return <main className={`present-shell ${remote ? 'remote-shell' : ''}`}>
     <header className="present-header">
-      <div>{onBack && <button className="button quiet" onClick={onBack}><ArrowLeft size={17} /> Editor</button>}<span className="eyebrow"><Radio size={15} /> {remote ? 'Presenter remote' : 'Presentation desk'}</span><h1>{content.project.name}</h1></div>
+      <div>{onBack && <button className="button quiet" onClick={onBack}><ArrowLeft size={17} /> Editor</button>}<span className="eyebrow"><Radio size={15} /> {remote ? state?.role === 'presenter-a' ? 'Presenter A' : state?.role === 'presenter-b' ? 'Presenter B' : state?.role === 'viewer' ? 'Read-only preview' : 'Presenter remote' : 'Presentation desk'}</span><h1>{content.project.name}</h1></div>
       <div className="present-header-actions">
         <span className={`status-tag ${state?.mode === 'live' ? 'live' : ''}`}><i />{state?.mode === 'live' ? 'On air' : state?.mode === 'hold' ? 'Held' : 'Preview'}</span>
         <span className="status-tag"><i />{credentials ? connection : 'Local rehearsal'}</span>
@@ -155,6 +168,10 @@ export function PresenterConsole({ fallback, credentials, remote = false, onChan
             const id = event.target.value
             update(withScene(content, { ...scene, players: scene.players.map(player => ({ ...player, highlight: player.id === id })) }))
           }}><option value="">None</option>{scene.players.map(player => <option key={player.id} value={player.id}>{player.number} · {player.name}</option>)}</select></label>
+          {!!content.graphics?.length && <label className="present-select">Prepared graphic<select aria-label="Prepared graphic" disabled={disabled} value={content.graphic?.id ?? ''} onChange={event => update({
+            ...content, graphic: content.graphics?.find(graphic => graphic.id === event.target.value),
+          })}><option value="">Tactical board</option>{content.graphics.map(graphic => <option key={graphic.id} value={graphic.id}>{graphic.title}</option>)}</select></label>}
+          {canEdit && content.graphic && <button className="button" disabled={disabled} aria-pressed={!!content.pip} onClick={() => update({ ...content, pip: !content.pip })}>Pitch inset</button>}
           {producer && <label className="present-select">Output format<select aria-label="Output format" value={content.format} onChange={event => update({ ...content, format: event.target.value as OutputFormat })}><option>16:9</option><option>9:16</option><option>Overlay</option></select></label>}
         </div>}
       </div>

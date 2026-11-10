@@ -174,9 +174,9 @@ export async function handleFootball(request: Request): Promise<Response> {
     const fallbackSeason = `${season}/${String(Number(season) + 1).slice(-2)}`
     if (section === 'squad') {
       const raw = entry.value as ApiTeam
-      return json({ ...base, team: { ...normalizeTeam(raw), players: (raw.squad || []).map(normalizePlayer) } }, 120)
+      return json({ ...base, team: { ...normalizeTeam(raw), players: (raw.squad || []).map(normalizePlayer) } }, 200, stale ? 15 : 120)
     }
-    if (section === 'match') return json({ ...base, match: normalizeMatch(entry.value as ApiMatch, source, fallbackSeason) }, stale ? 15 : 60)
+    if (section === 'match') return json({ ...base, match: normalizeMatch(entry.value as ApiMatch, source, fallbackSeason) }, 200, stale ? 15 : 60)
     if (section === 'standings') {
       const payload = entry.value as { standings?: { type: string; group?: string; table?: ApiStanding[] }[] }
       const standings = (payload.standings || []).filter(row => row.type === 'TOTAL').flatMap(row =>
@@ -185,11 +185,11 @@ export async function handleFootball(request: Request): Promise<Response> {
           losses: team.lost, goalDifference: team.goalDifference, points: team.points, group: row.group,
         })),
       )
-      return json({ ...base, standings }, stale ? 15 : 180)
+      return json({ ...base, standings }, 200, stale ? 15 : 180)
     }
     const payload = entry.value as { matches?: ApiMatch[] }
     const matches = (payload.matches || []).map(match => normalizeMatch(match, source, fallbackSeason)).filter(Boolean)
-    return json({ ...base, matches }, stale ? 15 : 90)
+    return json({ ...base, matches }, 200, stale ? 15 : 90)
   } catch (error) {
     return json({ configured: true, error: providerMessage(error) }, error instanceof ProviderError && error.status === 429 ? 429 : 503)
   }

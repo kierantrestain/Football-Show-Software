@@ -32,7 +32,12 @@ export function useEditorMedia(scene: Scene, onChange: (scene: Scene) => void, o
     <input ref={file} type="file" accept=".png,.jpg,.jpeg,.webp,.mp4,.webm,.mov" hidden aria-label="Import media" onChange={event => {
       const selected = event.target.files?.[0]
       event.currentTarget.value = ''
-      if (selected) void storeMedia(selected).then(media => { setShown(true); onChange({ ...scene, media }) }).catch(onError)
+      if (selected) void storeMedia(selected).then(media => {
+        setShown(true)
+        onChange({ ...scene, media, objects: scene.objects.map(object => object.space ? object : {
+          ...object, space: scene.media ? 'media' : 'pitch', mediaAssetId: scene.media?.assetId,
+        }) })
+      }).catch(onError)
     }} />
     {scene.media && <div className="media-transport">
       <Film size={16} /><b>{scene.media.name}</b>
@@ -54,6 +59,6 @@ export function useEditorMedia(scene: Scene, onChange: (scene: Scene) => void, o
       <button className="button quiet" onClick={() => onChange({ ...scene, media: undefined })}>Detach</button>
     </div>}
   </>
-  const upload = <button className="button quiet" onClick={() => file.current?.click()}><ImageUp size={16} /><span>Import media</span></button>
+  const upload = <button className="button quiet media-upload" aria-label="Import media" onClick={() => file.current?.click()}><ImageUp size={16} /><span>Import media</span></button>
   return { media, controls, upload, mediaTime: time }
 }

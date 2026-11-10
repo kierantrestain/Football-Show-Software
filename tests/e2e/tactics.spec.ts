@@ -79,7 +79,7 @@ test('create and reverse a curved run, and scrub a pass deterministically', asyn
   await expect(pitch.locator('[data-handle="0"] circle').last()).toHaveAttribute('cx', lastHandle!);
   await expect(pitch.locator('[data-handle="1"] circle').last()).toHaveAttribute('cx', firstHandle!);
 
-  await editor.getByRole('button', { name: 'Pass', exact: true }).click();
+  await editor.locator('.tac-rail').getByRole('button', { name: 'Pass', exact: true }).click();
   const receiver = await markerPoint(pitch.locator('[data-player-id="away-0"]'));
   await page.mouse.click(receiver.x, receiver.y);
   await expect(editor.getByLabel('Easing')).toHaveValue('linear');
@@ -90,4 +90,73 @@ test('create and reverse a curved run, and scrub a pass deterministically', asyn
   await expect(ball).not.toHaveAttribute('transform', ballMiddle!);
   await scrub.fill('1');
   await expect(ball).toHaveAttribute('transform', ballMiddle!);
+});
+
+test('calibrate a footage frame and save its markings as an editable pitch reconstruction', async ({ page }) => {
+  const corners = [{ x: 22, y: 13 }, { x: 81, y: 13 }, { x: 98, y: 57 }, { x: 8, y: 57 }];
+  const still = await page.evaluate((points) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#183026';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath();
+    for (const [index, { x, y }] of points.entries()) {
+      const at = { x: x * canvas.width / 105, y: y * canvas.height / 68 };
+      if (index === 0) ctx.moveTo(at.x, at.y);
+      else ctx.lineTo(at.x, at.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#416c40';
+    ctx.fill();
+    ctx.strokeStyle = '#e2ebd5';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    return canvas.toDataURL().split(',')[1];
+  }, corners);
+  await page.locator('input[aria-label="Import media"]').setInputFiles({
+    name: 'reference.png', mimeType: 'image/png', buffer: Buffer.from(still, 'base64'),
+  });
+  const editor = page.getByRole('region', { name: 'Tactics editor' });
+  const footage = editor.getByLabel('Media telestration canvas');
+  await expect(footage).toBeVisible();
+  await expect(footage.locator('[data-object-id]')).toHaveCount(0);
+
+  await editor.getByRole('button', { name: 'Defensive line', exact: true }).click();
+  const from = await screenPoint(footage, 33, 38);
+  const to = await screenPoint(footage, 72, 30);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.mouse.up();
+  await expect(footage.locator('[aria-label="line"]')).toHaveCount(1);
+
+  await editor.getByRole('button', { name: 'Align footage' }).click();
+  const clickCorners = async (order: number[]) => {
+    for (const index of order) {
+      const point = await screenPoint(footage, corners[index].x, corners[index].y);
+      await page.mouse.click(point.x, point.y);
+    }
+  };
+  await clickCorners([0, 2, 1, 3]);
+  await expect(editor.getByText(/clockwise pitch outline/)).toBeVisible();
+  await clickCorners([0, 1, 2, 3]);
+  await expect(editor.getByText('Pitch aligned', { exact: true })).toBeVisible();
+  await expect(footage.locator('[data-media-guide]')).toHaveCount(1);
+  await editor.getByRole('button', { name: 'Hide guide' }).click();
+  await expect(footage.locator('[data-media-guide]')).toHaveCount(0);
+  await editor.getByRole('button', { name: 'Show guide' }).click();
+  await expect(footage.locator('[data-media-guide]')).toHaveCount(1);
+
+  const sceneTitle = 'Starting Shape · Pitch reconstruction';
+  await editor.getByRole('button', { name: 'Map to pitch' }).click();
+  await expect(page.getByRole('heading', { name: sceneTitle })).toBeVisible();
+  const pitch = editor.getByLabel('Football tactics pitch');
+  await expect(pitch.locator('[data-player-id]')).toHaveCount(22);
+  await expect(pitch.locator('[aria-label="line"]')).toHaveCount(1);
+  await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: new RegExp(sceneTitle) }).click();
+  await expect(pitch.locator('[aria-label="line"]')).toHaveCount(1);
 });

@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test'
+import { setTimeout as delay } from 'node:timers/promises'
 
 test('LAN rehearsal with a producer, two tablets and a clean TV output', async ({ page: producer, browser }, testInfo) => {
+  const soak = process.env.STUDIO_REHEARSAL_SOAK === '1'
+  if (soak) test.setTimeout(660_000)
   const landscape = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true })
   const portrait = await browser.newContext({ viewport: { width: 820, height: 1180 }, hasTouch: true })
   const television = await browser.newContext({ viewport: { width: 1920, height: 1080 } })
@@ -34,6 +37,19 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await producer.getByRole('button', { name: 'Take live' }).click()
     await expect(onAirTitle).toHaveText('Starting Shape')
     await expect(tv.locator('[data-player-id]')).toHaveCount(22)
+    const openedAt = Date.now()
+    async function beat(minute: number) {
+      if (!soak) return
+      const target = openedAt + minute * 60_000
+      while (Date.now() < target) {
+        await delay(Math.min(15_000, target - Date.now()))
+        await expect(tv.locator('main.on-air')).not.toHaveAttribute('data-output', 'blank')
+        await expect(tv.getByRole('button')).toHaveCount(0)
+        await expect(tabletB.getByText('connected', { exact: true })).toBeVisible()
+      }
+      console.info(`Studio rehearsal ${minute}:00 passed.`)
+    }
+    await beat(1)
     await tabletA.getByRole('button', { name: 'Next scene' }).tap()
     await expect(tabletB.locator(heading)).toHaveText('The Press Trigger')
     await expect(onAirTitle).toHaveText('The Press Trigger')
@@ -45,6 +61,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(tv.locator('[data-handle]')).toHaveCount(0)
     await expect(tv.getByRole('button')).toHaveCount(0)
 
+    await beat(2)
     await expect(tabletA.getByRole('combobox', { name: 'Highlight player' })).toHaveValue('away-3')
     await tabletA.getByRole('button', { name: 'Edit board' }).tap()
     await expect(tabletB.getByRole('button', { name: 'Next scene' })).toBeDisabled()
@@ -53,6 +70,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(tabletA.getByRole('button', { name: 'Next scene' })).toBeDisabled()
     await expect(tabletB.getByRole('button', { name: 'Next scene' })).toBeEnabled()
 
+    await beat(3)
     await expect.poll(() => tv.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
     await television.setOffline(true)
     await portrait.setOffline(true)
@@ -69,6 +87,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(tabletB.locator(heading)).toHaveText('Break the Lines')
     await expect(tabletB.getByText('connected', { exact: true })).toBeVisible()
 
+    await beat(4)
     await tabletB.getByRole('button', { name: 'Play', exact: true }).tap()
     await expect(producer.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
     await tv.bringToFront()
@@ -78,6 +97,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await producer.getByRole('button', { name: 'Hold output' }).click()
     await expect(producer.getByText('Held', { exact: true })).toBeVisible()
     await expect(tabletB.getByText('Held', { exact: true })).toBeVisible()
+    await beat(5)
     await tabletB.getByRole('button', { name: 'Next scene' }).tap()
     await expect(producer.locator(heading)).toHaveText('Recovery Run')
     await expect(onAirTitle).toHaveText('Break the Lines')
@@ -85,11 +105,108 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(onAirTitle).toHaveText('Break the Lines')
     await expect(tv.getByRole('button')).toHaveCount(0)
 
+    await beat(6)
     await producer.getByRole('button', { name: 'Take live' }).click()
     await expect(onAirTitle).toHaveText('Recovery Run')
-    await testInfo.attach('broadcast-1920×1080', { body: await tv.screenshot(), contentType: 'image/png' })
-    await testInfo.attach('presenter-landscape', { body: await tabletA.screenshot(), contentType: 'image/png' })
-    await testInfo.attach('presenter-portrait', { body: await tabletB.screenshot(), contentType: 'image/png' })
+    await producer.getByRole('button', { name: 'Presenter A revoked' }).click()
+    await expect(tabletA.getByRole('button', { name: 'Next scene' })).toBeEnabled()
+    await testInfo.attach('broadcast-1920×1080', { body: await tv.screenshot({ path: testInfo.outputPath('broadcast-1920x1080.png') }), contentType: 'image/png' })
+    await testInfo.attach('presenter-landscape', { body: await tabletA.screenshot({ path: testInfo.outputPath('presenter-landscape.png') }), contentType: 'image/png' })
+    await testInfo.attach('presenter-portrait', { body: await tabletB.screenshot({ path: testInfo.outputPath('presenter-portrait.png') }), contentType: 'image/png' })
+    await beat(7)
+    const graphic = tv.getByTestId('broadcast-graphic')
+    const previewGraphic = tabletB.getByTestId('broadcast-graphic')
+    await producer.getByRole('button', { name: 'Editor', exact: true }).click()
+    await expect(producer.getByRole('button', { name: 'Stage preview' })).toBeEnabled()
+    await producer.getByRole('button', { name: 'Graphics', exact: true }).click()
+    await producer.getByRole('button', { name: 'Queue to preview' }).click()
+    await expect(previewGraphic.getByRole('heading', { name: 'Match result' })).toBeVisible()
+    await expect(onAirTitle).toHaveText('Recovery Run')
+    await producer.getByRole('button', { name: 'Presenter desk' }).click()
+    await producer.getByRole('button', { name: 'Take live' }).click()
+    await expect(graphic.getByRole('heading', { name: 'Match result' })).toBeVisible()
+    await tv.screenshot({ path: testInfo.outputPath('match-result-on-air.png') })
+    await beat(8)
+
+    await producer.getByRole('button', { name: 'Editor', exact: true }).click()
+    await expect(producer.getByRole('button', { name: 'Stage preview' })).toBeEnabled()
+    await producer.getByRole('button', { name: 'Match data', exact: true }).click()
+    await producer.getByRole('button', { name: 'Comparisons', exact: true }).click()
+    await producer.getByRole('button', { name: 'Queue comparison' }).click()
+    await expect(previewGraphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
+    await expect(graphic.getByRole('heading', { name: 'Match result' })).toBeVisible()
+    await producer.getByRole('button', { name: 'Presenter desk' }).click()
+    await producer.getByRole('button', { name: 'Take live' }).click()
+    await expect(graphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
+    await expect(graphic.getByText('Cole Palmer', { exact: true })).toBeVisible()
+    await testInfo.attach('player-comparison-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('player-comparison-on-air.png') }), contentType: 'image/png' })
+    const prepared = tabletB.getByRole('combobox', { name: 'Prepared graphic' })
+    await prepared.selectOption({ label: 'Match result' })
+    await expect(graphic.getByRole('heading', { name: 'Match result' })).toBeVisible()
+    await tabletB.getByRole('button', { name: 'Pitch inset' }).tap()
+    await expect(tv.locator('.air-pip [data-player-id]')).toHaveCount(22)
+    await tabletB.getByRole('button', { name: 'Pitch inset' }).tap()
+    await prepared.selectOption({ label: 'Player comparison' })
+    await expect(graphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
+
+    await producer.getByRole('button', { name: 'Editor', exact: true }).click()
+    await beat(9)
+    await producer.getByRole('button', { name: /Starting Shape/ }).click()
+    const still = await producer.evaluate(() => {
+      const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 360 })
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#264e42'
+      ctx.fillRect(0, 0, 640, 360)
+      ctx.strokeStyle = '#e9f2db'
+      ctx.lineWidth = 3
+      ctx.strokeRect(20, 20, 600, 320)
+      ctx.strokeRect(20, 95, 100, 170)
+      return canvas.toDataURL('image/png').split(',')[1]
+    })
+    await producer.locator('input[aria-label="Import media"]').setInputFiles({
+      name: 'broadcast-still.png', mimeType: 'image/png', buffer: Buffer.from(still, 'base64'),
+    })
+    const drawing = producer.locator('[aria-label="Media telestration canvas"]')
+    await expect(drawing).toBeVisible()
+    await producer.getByRole('button', { name: 'Defensive line', exact: true }).click()
+    const box = await drawing.boundingBox()
+    if (!box) throw new Error('Missing the telestration canvas.')
+    await producer.mouse.move(box.x + box.width * .25, box.y + box.height * .33)
+    await producer.mouse.down()
+    await producer.mouse.move(box.x + box.width * .74, box.y + box.height * .62, { steps: 7 })
+    await producer.mouse.up()
+    await expect(drawing.locator('[aria-label="line"]')).toHaveCount(1)
+    await producer.getByRole('button', { name: 'Stage preview' }).click()
+    await expect(tabletB.getByRole('img', { name: 'Match analysis still' })).toBeVisible()
+    await expect(graphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
+    await producer.getByRole('button', { name: 'Present', exact: true }).click()
+    await producer.getByRole('button', { name: 'Take live' }).click()
+    await expect(tv.getByRole('img', { name: 'Match analysis still' })).toBeVisible()
+    await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
+    await expect(tv.locator('[data-player-id]')).toHaveCount(0)
+    await testInfo.attach('telestration-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-on-air.png') }), contentType: 'image/png' })
+    const format = producer.getByRole('combobox', { name: 'Output format' })
+    await format.selectOption('9:16')
+    await expect(tv.locator('main.on-air')).toHaveAttribute('data-output', '9:16')
+    await expect(tv.locator('.broadcast-frame.portrait')).toBeVisible()
+    await format.selectOption('Overlay')
+    await expect(tv.locator('main.on-air')).toHaveAttribute('data-output', 'Overlay')
+    await expect(tv.getByRole('img', { name: 'Match analysis still' })).toHaveCount(0)
+    await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
+    const overlay = await tv.screenshot({ omitBackground: true })
+    const cornerAlpha = await tv.evaluate(async encoded => {
+      const frame = new Image()
+      frame.src = 'data:image/png;base64,' + encoded
+      await frame.decode()
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 1
+      const context = canvas.getContext('2d')!
+      context.drawImage(frame, 0, 0)
+      return context.getImageData(0, 0, 1, 1).data[3]
+    }, overlay.toString('base64'))
+    expect(cornerAlpha).toBe(0)
+
+    await beat(10)
     await producer.getByRole('button', { name: 'Clear output' }).click()
     await expect(tv.locator('main.on-air')).toHaveAttribute('data-output', 'blank')
     await expect(tv.getByRole('button')).toHaveCount(0)

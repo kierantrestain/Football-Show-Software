@@ -167,6 +167,17 @@ test('LAN server serves clean deep routes, rejects malformed commands and enforc
     assert.equal((await request(JSON.stringify({ type: 'create', preview: { ...rundown(0, 0), sceneId: 'unknown' } }))).status, 422)
     assert.equal((await request(JSON.stringify({ type: 'create', preview: { data: 'x'.repeat(1_050_000) } }))).status, 413)
     assert.equal((await fetch(`${app.base}/api/session?id=../private`)).status, 400)
+    const opening = rundown(0, 0)
+    const { producer, screen } = await open(app.base, opening)
+    await read(mutate(app.base, producer, 0, { type: 'take' }))
+    assert.equal((await mutate(app.base, producer, 1, { type: 'update', content: { ...opening, cue: 99 } })).status, 422)
+    const oversizedRundown = { ...opening, graphics: Array.from({ length: 21 }, (_, index) => ({
+      id: `graphic-${index}`, kind: 'title' as const, title: 'Untaken graphic', subtitle: 'Rehearsal', source: 'Demo',
+    })) }
+    assert.equal((await mutate(app.base, producer, 1, { type: 'stage', content: oversizedRundown })).status, 422)
+    const protectedOutput = await read(get(app.base, screen))
+    assert.equal(protectedOutput.revision, 1)
+    assert.deepEqual(protectedOutput.live, opening)
   } finally {
     await app.close()
     await rm(directory, { recursive: true, force: true })

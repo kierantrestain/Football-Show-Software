@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyFormation, attackDirection, curvePoint, defaultCurve, evaluateScene, formations,
-  makeLineup, newScene, sampleProject, swapSides, trackValue, translatePlayers, validateProject,
+  makeLineup, mediaCalibration, newScene, objectOnSurface, reconstructMediaScene, sampleProject, swapSides,
+  trackValue, translatePlayers, validateProject, type Point, type TacticalObject,
 } from '../src/domain';
 
 describe('football shape and animation', () => {
@@ -83,5 +84,71 @@ describe('football shape and animation', () => {
     damaged.scenes[0].objects[0].points = [];
     expect(() => validateProject(damaged)).toThrow(/incomplete/);
     expect(() => validateProject({ ...sampleProject, scenes: [sampleProject.scenes[0], sampleProject.scenes[0]] })).toThrow(/duplicate/);
+  });
+});
+
+describe('footage calibration', () => {
+  const corners = [{ x: 22, y: 13 }, { x: 79, y: 9 }, { x: 98, y: 56 }, { x: 8, y: 60 }];
+  const pitchCorners = [{ x: 0, y: 0 }, { x: 105, y: 0 }, { x: 105, y: 68 }, { x: 0, y: 68 }];
+
+  it('projects all four reference corners and inverts asymmetric perspective', () => {
+    const calibration = mediaCalibration(corners);
+    pitchCorners.forEach((corner, index) => {
+      const projected = calibration.toMedia(corner);
+      expect(projected.x).toBeCloseTo(corners[index].x, 8);
+      expect(projected.y).toBeCloseTo(corners[index].y, 8);
+    });
+    for (const original of [{ x: 52.5, y: 34 }, { x: 16.5, y: 13.84 }, { x: 102, y: 51 }]) {
+      const recovered = calibration.toPitch(calibration.toMedia(original));
+      expect(recovered?.x).toBeCloseTo(original.x, 8);
+      expect(recovered?.y).toBeCloseTo(original.y, 8);
+    }
+  });
+
+  it('rejects incomplete, crossed and degenerate quadrilaterals', () => {
+    expect(() => mediaCalibration(corners.slice(0, 3))).toThrow(/four corners/);
+    expect(() => mediaCalibration([corners[0], corners[2], corners[1], corners[3]])).toThrow(/clockwise/);
+    expect(() => mediaCalibration(corners.map((point) => ({ ...point, y: 12 })))).toThrow(/clockwise/);
+  });
+
+  it('creates an estimated pitch scene with mapped markings and isolates original assets', () => {
+    const calibration = mediaCalibration(corners);
+    const scene = newScene();
+    scene.media = { assetId: 'frame', type: 'image', name: 'review.png', alignment: calibration.corners };
+    const original: Point[] = [{ x: 30, y: 14 }, { x: 65, y: 46 }];
+    const base: TacticalObject = {
+      id: 'arrow', kind: 'arrow', points: original.map(calibration.toMedia), curve: calibration.toMedia({ x: 45, y: 20 }),
+      color: '#defb50', opacity: 1, thickness: .5, arrowhead: true, space: 'media', mediaAssetId: 'frame',
+    };
+    scene.objects = [
+      base,
+      { ...base, id: 'outside', curve: undefined, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] },
+      { ...base, id: 'other', mediaAssetId: 'old-frame' },
+      { ...base, id: 'pitch', space: 'pitch' },
+    ];
+    expect(objectOnSurface(scene.objects[2], scene, true)).toBe(false);
+    expect(objectOnSurface(scene.objects[3], scene, false)).toBe(true);
+    const reconstructed = reconstructMediaScene(scene);
+    expect(reconstructed.media).toBeUndefined();
+    expect(reconstructed.classification).toBe('RECONSTRUCTED');
+    expect(reconstructed.players).toHaveLength(22);
+    expect(reconstructed.sourceReference).toEqual({ label: 'review.png', estimated: true });
+    expect(reconstructed.objects).toHaveLength(1);
+    const [graphic] = reconstructed.objects;
+    expect(graphic.points).toHaveLength(25);
+    expect(graphic.points[0].x).toBeCloseTo(original[0].x, 8);
+    expect(graphic.points.at(-1)?.y).toBeCloseTo(original[1].y, 8);
+    expect(graphic.space).toBe('pitch');
+    expect(reconstructed.notes).toContain('1 marking(s) outside');
+    expect(validateProject({ ...sampleProject, scenes: [scene, reconstructed] }).scenes).toHaveLength(2);
+
+    scene.media = { ...scene.media, type: 'video', alignmentFrame: 3, frame: 10 };
+    scene.objects = [
+      { ...base, id: 'aligned', mediaIn: 2, mediaOut: 5 },
+      { ...base, id: 'later', mediaIn: 6, mediaOut: 12 },
+    ];
+    const videoReconstruction = reconstructMediaScene(scene);
+    expect(videoReconstruction.objects).toHaveLength(1);
+    expect(videoReconstruction.notes).toContain('at 3.00 s');
   });
 });

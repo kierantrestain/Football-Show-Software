@@ -12,6 +12,8 @@ export type Playout = {
   speed: number
   loop: boolean
   graphic?: GraphicSpec
+  graphics?: GraphicSpec[]
+  pip?: boolean
   format: OutputFormat
   sharedImage?: { assetId: string; url: string }
 }

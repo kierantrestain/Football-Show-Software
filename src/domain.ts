@@ -1,6 +1,7 @@
 export const PITCH = { length: 105, width: 68 } as const;
 
 export type Point = { x: number; y: number };
+export type MediaAlignment = [Point, Point, Point, Point];
 export type Side = 'home' | 'away';
 export type PitchView = 'full' | 'half' | 'third' | 'box' | 'wide' | 'broadcast' | 'elevated';
 export type Orientation = 'horizontal' | 'vertical';
@@ -62,6 +63,9 @@ export type TacticalObject = {
   label?: string;
   hidden?: boolean;
   locked?: boolean;
+  space?: 'pitch' | 'media';
+  mediaAssetId?: string;
+  fillOpacity?: number;
   mediaIn?: number;
   mediaOut?: number;
 };
@@ -130,7 +134,7 @@ export type Scene = {
   swapped?: boolean;
   cameraKeys?: { time: number; view: PitchView; orientation: Orientation }[];
   substitutions?: { outgoing: Player; incomingId: string; time: number }[];
-  media?: { assetId: string; type: 'image' | 'video'; name: string; frame?: number };
+  media?: { assetId: string; type: 'image' | 'video'; name: string; frame?: number; alignment?: MediaAlignment; alignmentFrame?: number };
   sourceReference?: SourceReference;
 };
 
@@ -375,6 +379,131 @@ export function newScene(from?: Scene): Scene {
   };
 }
 
+export function mediaCalibration(points: Point[]) {
+  if (points.length !== 4 || points.some(({ x, y }) => !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 105 || y < 0 || y > 68)) {
+    throw new Error('Choose four corners within the footage.');
+  }
+  const corners = points as MediaAlignment;
+  const [nw, ne, se, sw] = corners;
+  const cross = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+  const area = corners.reduce((total, current, index) => {
+    const next = corners[(index + 1) % 4];
+    return total + current.x * next.y - current.y * next.x;
+  }, 0);
+  if (area < 170 || corners.some((a, i) => cross(a, corners[(i + 1) % 4], corners[(i + 2) % 4]) < 4)) {
+    throw new Error('Choose a clear, clockwise pitch outline with four separated corners.');
+  }
+  const dx1 = ne.x - se.x;
+  const dx2 = sw.x - se.x;
+  const dy1 = ne.y - se.y;
+  const dy2 = sw.y - se.y;
+  const sx = nw.x - ne.x + se.x - sw.x;
+  const sy = nw.y - ne.y + se.y - sw.y;
+  const determinant = dx1 * dy2 - dx2 * dy1;
+  const g = (sx * dy2 - dx2 * sy) / determinant;
+  const h = (dx1 * sy - sx * dy1) / determinant;
+  if (Math.min(1 + g, 1 + h, 1 + g + h) < .025) throw new Error('This camera angle is too shallow to align safely.');
+  const a = ne.x - nw.x + g * ne.x;
+  const b = sw.x - nw.x + h * sw.x;
+  const d = ne.y - nw.y + g * ne.y;
+  const e = sw.y - nw.y + h * sw.y;
+  return {
+    corners,
+    toMedia({ x, y }: Point): Point {
+      const u = x / PITCH.length;
+      const v = y / PITCH.width;
+      const z = 1 + g * u + h * v;
+      return { x: (a * u + b * v + nw.x) / z, y: (d * u + e * v + nw.y) / z };
+    },
+    toPitch({ x, y }: Point): Point | undefined {
+      const ax = a - g * x;
+      const bx = b - h * x;
+      const ay = d - g * y;
+      const by = e - h * y;
+      const z = ax * by - bx * ay;
+      if (Math.abs(z) < 1e-5) return;
+      return {
+        x: PITCH.length * ((x - nw.x) * by - (y - nw.y) * bx) / z,
+        y: PITCH.width * (ax * (y - nw.y) - ay * (x - nw.x)) / z,
+      };
+    },
+  };
+}
+
+export function tryMediaCalibration(points?: Point[]) {
+  if (!points) return undefined;
+  try {
+    return mediaCalibration(points);
+  } catch {
+    return undefined;
+  }
+}
+
+export function objectOnSurface(object: TacticalObject, scene: Scene, media: boolean) {
+  if (object.space === 'media') return media && (!object.mediaAssetId || object.mediaAssetId === scene.media?.assetId);
+  if (object.space === 'pitch') return !media;
+  return true;
+}
+
+export function objectAtFootageTime(object: TacticalObject, time: number) {
+  return (object.mediaIn === undefined || time >= object.mediaIn) && (object.mediaOut === undefined || time <= object.mediaOut);
+}
+
+function mediaShape(object: TacticalObject): Pick<TacticalObject, 'points' | 'kind' | 'fillOpacity'> {
+  const { points, kind, curve } = object;
+  const [a, b = a, c] = points;
+  if (kind === 'circle' || kind === 'spotlight') {
+    const radius = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 2);
+    const contour = Array.from({ length: 40 }, (_, i) => {
+      const angle = Math.PI * i / 20;
+      return { x: a.x + radius * Math.cos(angle), y: a.y + radius * Math.sin(angle) };
+    });
+    return { points: contour, kind: 'polygon', fillOpacity: kind === 'spotlight' ? .13 : 0 };
+  }
+  if (kind === 'lane') {
+    const length = Math.max(Math.hypot(b.x - a.x, b.y - a.y), .1);
+    const x = (a.y - b.y) / length * 1.9;
+    const y = (b.x - a.x) / length * 1.9;
+    return { points: [{ x: a.x + x, y: a.y + y }, { x: b.x + x, y: b.y + y }, { x: b.x - x, y: b.y - y }, { x: a.x - x, y: a.y - y }], kind: 'polygon', fillOpacity: .38 };
+  }
+  if (kind === 'zone' || kind === 'channel') {
+    return { points: [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }], kind: 'polygon', fillOpacity: kind === 'zone' ? .38 : .22 };
+  }
+  if (kind === 'angle' || (kind === 'triangle' && !c)) return { points: [a, b, c ?? { x: a.x, y: b.y }], kind };
+  if (curve) return { points: Array.from({ length: 25 }, (_, i) => curvePoint(a, b, curve, i / 24)), kind };
+  return { points, kind, fillOpacity: object.fillOpacity };
+}
+
+export function reconstructMediaScene(scene: Scene): Scene {
+  const media = scene.media;
+  const calibration = tryMediaCalibration(media?.alignment);
+  if (!media || !calibration) throw new Error('Align the footage before mapping its markings.');
+  const frame = media.alignmentFrame ?? media.frame ?? 0;
+  let omitted = 0;
+  const objects = scene.objects.filter((object) => objectOnSurface(object, scene, true) && objectAtFootageTime(object, frame)).flatMap((object) => {
+    const shape = mediaShape(object);
+    const projected = shape.points.map(calibration.toPitch);
+    if (projected.some((point) => !point || point.x < -.15 || point.x > 105.15 || point.y < -.15 || point.y > 68.15)) {
+      omitted += 1;
+      return [];
+    }
+    return [{
+      ...object, ...shape, points: projected.map((point) => onPitch(point!)), id: uid(), curve: undefined,
+      space: 'pitch' as const, mediaAssetId: undefined, mediaIn: undefined, mediaOut: undefined,
+    }];
+  });
+  return {
+    ...newScene(scene), name: `${scene.name} · Pitch reconstruction`, classification: 'RECONSTRUCTED',
+    media: undefined, view: 'full', orientation: 'horizontal', cameraKeys: [], paths: [], tracks: [], cues: [], objects,
+    notes: [
+      scene.notes,
+      `Manual four-corner footage alignment${media.type === 'video' ? ` at ${frame.toFixed(2)} s` : ''}. Player positions are editable estimates.`,
+      omitted ? `${omitted} marking(s) outside the calibrated pitch were omitted.` : '',
+    ].filter(Boolean).join('\n\n'),
+    sourceReference: { label: media.name, estimated: true },
+  };
+}
+
 const demoBase = newScene();
 const demoStroke = { color: inkColors[0], opacity: .92, thickness: .54 };
 const opening: Scene = {
@@ -501,6 +630,8 @@ function validScene(scene: unknown) {
       && objectKinds.has(item.kind as ObjectKind) && arrayOf(item.points, point) && item.points.length > 0 && optional(item.curve, point)
       && finite(item.opacity) && finite(item.thickness) && optional(item.label, str) && optional(item.dashed, bool)
       && optional(item.arrowhead, bool) && optional(item.hidden, bool) && optional(item.locked, bool)
+      && (item.space === undefined || item.space === 'pitch' || item.space === 'media')
+      && optional(item.mediaAssetId, str) && optional(item.fillOpacity, finite)
       && optional(item.mediaIn, finite) && optional(item.mediaOut, finite))
     && arrayOf(scene.paths, (item) => record(item) && strings(item, ['id', 'target']) && actions.has(item.action as string)
       && point(item.from) && point(item.to) && optional(item.control, point) && finite(item.start) && finite(item.duration) && item.duration > 0
@@ -512,7 +643,9 @@ function validScene(scene: unknown) {
       && optional(item.reveal, (value) => arrayOf(value, str)) && optional(item.hide, (value) => arrayOf(value, str))
       && optional(item.highlight, (value) => arrayOf(value, str)) && optional(item.view, viewKey))
     && optional(scene.media, (media) => record(media) && strings(media, ['assetId', 'name'])
-      && ['image', 'video'].includes(media.type as string) && optional(media.frame, finite))
+      && ['image', 'video'].includes(media.type as string) && optional(media.frame, finite)
+      && optional(media.alignmentFrame, (value) => finite(value) && value >= 0)
+      && optional(media.alignment, (alignment) => arrayOf(alignment, point) && Boolean(tryMediaCalibration(alignment as Point[]))))
     && optional(scene.sourceReference, (source) => record(source) && str(source.label) && optional(source.url, str)
       && optional(source.retrievedAt, str) && optional(source.estimated, bool));
 }

@@ -31,10 +31,10 @@ function SourceTag({ source }: { source: Source }) {
     ? <a className="desk-source-tag official" href={source.url} target="_blank" rel="noreferrer">{name} <ArrowUpRight size={12} /></a>
     : <span className="desk-source-tag">{name}</span>
 }
-export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false }: {
+export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, initialMatchId }: {
   onLoadTactics: (payload: LoadTacticsPayload) => void
   onQueueGraphic: (graphic: GraphicSpec) => void
-  producer?: boolean
+  producer?: boolean; initialMatchId?: string
 }) {
   const [tab, setTab] = useState<DeskTab>('matches')
   const [competition, setCompetition] = useState('demo')
@@ -42,7 +42,7 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false }: 
   const [filter, setFilter] = useState<FixtureFilter>('all')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState(false)
-  const [activeId, setActiveId] = useState(demoMatches[0].id)
+  const [activeId, setActiveId] = useState(initialMatchId ?? demoMatches[0].id)
   const [matchFeed, setMatchFeed] = useState<{ matches: Match[]; source?: Source; message?: string; loading?: boolean }>({ matches: [] })
   const [tableFeed, setTableFeed] = useState<{ standings: Standing[]; message?: string; loading?: boolean }>({ standings: [] })
   const demo = competition === 'demo'
@@ -177,17 +177,21 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
     }).catch(() => {})
     return () => controller.abort()
   }, [active.away.id, active.home.id, active.source.kind, tab])
-  const hasLineups = active.home.players.length >= 11 && active.away.players.length >= 11
+  const hasHome = active.home.players.length >= 11
+  const hasAway = active.away.players.length >= 11
+  const hasLineups = hasHome && hasAway
   const load = (moment?: Moment, teams?: [Team, Team]) => {
-    const [home, away] = teams || (hasLineups
-      ? [active.home, active.away]
-      : [{ ...active.home, formation: active.home.formation || '4-3-3', players: [] }, { ...active.away, formation: active.away.formation || '4-2-3-1', players: [] }])
+    const [home, away] = teams || [
+      hasHome ? active.home : { ...active.home, formation: active.home.formation || '4-3-3', players: [] },
+      hasAway ? active.away : { ...active.away, formation: active.away.formation || '4-2-3-1', players: [] },
+    ]
+    const lineupSource = teams ? 'manual line-up' : hasLineups ? 'line-ups supplied' : hasHome || hasAway ? 'one line-up supplied' : 'blank formations'
     onLoadTactics({
       matchId: active.id, title: `${home.name} v ${away.name}`, competition: active.competition, score: active.score,
       home: moment ? applyMoment(home, active.moments, moment) : home,
       away: moment ? applyMoment(away, active.moments, moment) : away,
       classification: moment && active.source.kind !== 'demo' ? 'RECONSTRUCTED' : 'HYPOTHETICAL',
-      source: `${active.source.label} · ${hasLineups ? 'line-up supplied' : teams ? 'manual line-up' : 'blank formation'} · positions estimated`, moment,
+      source: `${active.source.label} · ${lineupSource} · positions estimated`, moment,
     })
   }
   const queue = (graphic: GraphicSpec) => {
@@ -196,7 +200,7 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
   }
   const label = hasLineups
     ? active.source.kind === 'demo' ? active.status === 'scheduled' ? 'Load expected demo XI' : 'Load into tactics' : 'Load confirmed XI'
-    : 'Load blank formation'
+    : hasHome || hasAway ? 'Load available XI' : 'Load blank formation'
   return <section className="data-match-centre" aria-label="Match details">
     <div className="data-match-hero">
       <div className="data-hero-top"><div><span><i /> {active.competition.toUpperCase()}</span><small>{active.season}{active.round ? ` / MATCHWEEK ${active.round}` : ''}</small></div><span className={active.status === 'live' ? 'desk-indicator live' : 'desk-indicator'}>{statusLabels[active.status]}</span></div>

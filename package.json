@@ -12,7 +12,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --exclude tests/e2e/**",
+    "test": "vitest run",
     "test:e2e": "playwright test",
     "studio": "tsx --env-file-if-exists=.env server/index.ts"
   },

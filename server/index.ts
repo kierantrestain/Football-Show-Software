@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { pathToFileURL } from 'node:url'
 import { handleFootball } from '../api/football'
-import { sessionService } from './session-service'
+import { MAX_SESSION_BODY_BYTES, sessionService } from './session-service'
 import { diskSessionStore } from './session-store'
 import { validStudioSnapshot } from './studio-snapshot'
 
@@ -47,6 +47,24 @@ function browserRequest(request: IncomingMessage, response: ServerResponse, url:
   return new Request(url, init)
 }
 
+function discardIncoming(request: IncomingMessage) {
+  return new Promise<boolean>(resolve => {
+    const timer = setTimeout(() => finish(false), 1000)
+    const ended = () => finish(true)
+    const closed = () => finish(false)
+    function finish(drained: boolean) {
+      clearTimeout(timer)
+      request.removeListener('end', ended)
+      request.removeListener('close', closed)
+      resolve(drained)
+    }
+    request.once('end', ended)
+    request.once('close', closed)
+    request.resume()
+    if (request.readableEnded) finish(true)
+  })
+}
+
 async function writeResponse(response: ServerResponse, data: Response) {
   if (response.destroyed) return
   response.writeHead(data.status, Object.fromEntries(data.headers))
@@ -73,7 +91,16 @@ export function createStudioServer(options: StudioServerOptions = {}) {
     try {
       const url = new URL(request.url ?? '/', 'http://studio.local')
       if (url.pathname === '/api/session') {
-        return await writeResponse(response, await handleSession(browserRequest(request, response, url)))
+        if (Number(request.headers['content-length']) > MAX_SESSION_BODY_BYTES) {
+          // Discard the rejected request so clients receive 413 while uploading on a keep-alive connection.
+          if (!await discardIncoming(request) && !response.destroyed) response.setHeader('connection', 'close')
+          return await writeResponse(response, Response.json({ error: 'Studio state exceeds the 1 MiB session limit.' }, {
+            status: 413, headers: { 'cache-control': 'no-store' },
+          }))
+        }
+        const data = await handleSession(browserRequest(request, response, url))
+        if (!request.complete && !response.destroyed) response.setHeader('connection', 'close')
+        return await writeResponse(response, data)
       }
       if (url.pathname === '/api/football') {
         return await writeResponse(response, await handleFootball(browserRequest(request, response, url)))

@@ -287,3 +287,20 @@
   .data-lineup-list .desk-panel-head h2 { font-size: 25px; }
   .data-lineup-list li { padding-inline: 7px; gap: 4px; }
 }
+
+.football-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem 1rem;
+  color: var(--muted, #c3c8d0);
+  font-size: .78rem;
+  padding: .65rem .8rem;
+  margin-block: .7rem;
+  border: 1px solid var(--line, #414550);
+  border-radius: .35rem;
+}
+.football-import { margin-block: 1.2rem; padding: .8rem; }
+.football-import > summary { min-height: 44px; display: flex; align-items: center; gap: .45rem; font-weight: 700; cursor: pointer; }
+.football-import p { margin-block: .4rem; }
+.football-import section { display: grid; gap: .5rem; }

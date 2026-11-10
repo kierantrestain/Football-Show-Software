@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { ArrowUpRight, BarChart3, Check, List, Search, Users } from 'lucide-react'
 import { demoPlayerStats, demoSource, demoTeamStats, officialPlayers, officialTeamStats, playerMetrics, teamMetrics } from './fixtures'
-import type { ComparisonSubject, GraphicSpec, Metric } from './model'
+import type { ComparisonSubject, GraphicSpec, Match, Metric } from './model'
+import { seasonSubjects } from './footballDataset'
 
 const defaultMetrics = { players: ['goals', 'assists', 'involvements', 'played'], teams: ['points', 'wins', 'goalDifference', 'winRate'] }
 const pageSize = 7
@@ -14,11 +15,22 @@ function compareValue(subject: ComparisonSubject, metric: Metric, per90: boolean
 function unique(items: (string | undefined)[]) {
   return Array.from(new Set(items.filter((item): item is string => !!item)))
 }
-export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: GraphicSpec) => void }) {
-  const [dataset, setDataset] = useState<'archive' | 'demo'>('archive')
-  const [mode, setMode] = useState<'players' | 'teams'>('players')
-  const [selected, setSelected] = useState<string[]>(officialPlayers.slice(0, 3).map(subject => subject.id))
-  const [metricKeys, setMetricKeys] = useState(defaultMetrics.players)
+export function ComparisonDesk({ onQueueGraphic, matches, competition, demo }: {
+  onQueueGraphic: (graphic: GraphicSpec) => void; matches: Match[]; competition: string; demo: boolean
+}) {
+  type Dataset = 'current' | 'archive' | 'demo'
+  type Mode = 'players' | 'teams'
+  const getSubjects = (dataset: Dataset, mode: Mode) => dataset === 'archive' ? mode === 'players' ? officialPlayers : officialTeamStats
+    : dataset === 'demo' ? mode === 'players' ? demoPlayerStats : demoTeamStats
+      : seasonSubjects(matches, competition, mode === 'players' ? 'player' : 'team')
+  const initialDataset: Dataset = demo ? 'archive' : 'current'
+  const initialMode: Mode = demo ? 'players' : 'teams'
+  const initialSubjects = getSubjects(initialDataset, initialMode)
+  const [dataset, setDataset] = useState<Dataset>(initialDataset)
+  const [mode, setMode] = useState<Mode>(initialMode)
+  const [period, setPeriod] = useState(initialSubjects[0]?.period ?? '')
+  const [selected, setSelected] = useState<string[]>(initialSubjects.filter(subject => subject.period === initialSubjects[0]?.period).slice(0, 3).map(subject => subject.id))
+  const [metricKeys, setMetricKeys] = useState(defaultMetrics[initialMode])
   const [presentation, setPresentation] = useState<'table' | 'bars'>('table')
   const [per90, setPer90] = useState(false)
   const [search, setSearch] = useState('')
@@ -27,16 +39,21 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
   const [page, setPage] = useState(0)
   const [status, setStatus] = useState('')
   const archived = dataset === 'archive'
-  const subjects = getSubjects(dataset, mode)
+  const allSubjects = getSubjects(dataset, mode)
+  const periods = unique(allSubjects.map(subject => subject.period))
+  const subjects = period ? allSubjects.filter(subject => subject.period === period) : allSubjects
   const metrics = mode === 'players' ? playerMetrics : teamMetrics
   const chosen = subjects.filter(subject => selected.includes(subject.id))
   const shownMetrics = metrics.filter(metric => metricKeys.includes(metric.key))
-  const sample = archived ? 'Premier League · 2023/24 · full season' : 'Premier Division · 2026/27 · 12 matchweeks'
+  const sample = archived ? 'Premier League · 2023/24 · full season' : dataset === 'demo' ? 'Premier Division · 2026/27 · 12 matchweeks' : subjects[0]?.subtitle || 'Season statistics unavailable for this selection'
   const selectMode = (nextDataset: typeof dataset, nextMode: typeof mode) => {
     setDataset(nextDataset)
     setMode(nextMode)
     setMetricKeys(defaultMetrics[nextMode])
-    setSelected(getSubjects(nextDataset, nextMode).slice(0, 3).map(subject => subject.id))
+    const candidates = getSubjects(nextDataset, nextMode)
+    const firstPeriod = candidates[0]?.period
+    setPeriod(firstPeriod ?? '')
+    setSelected(candidates.filter(subject => subject.period === firstPeriod).slice(0, 3).map(subject => subject.id))
     setSearch('')
     setClub('')
     setPosition('')
@@ -60,7 +77,7 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
     onQueueGraphic({
       id: `comparison-${Date.now()}`, kind: mode, title: mode === 'players' ? 'Player comparison' : 'Team comparison',
       subtitle: `${sample} · ${usePer90 ? 'per 90 where available' : 'season totals'}`,
-      source: archived ? 'Premier League · verified season archive' : demoSource.label,
+      source: archived ? 'Premier League · verified season archive' : dataset === 'demo' ? demoSource.label : unique(chosen.map(subject => subject.source?.label)).join(' / ') || 'Authorised season records',
       subjects: chosen.map(({ name, subtitle, color }) => ({ name, subtitle, color })),
       rows: rows.slice(page * pageSize, (page + 1) * pageSize),
     })
@@ -74,7 +91,13 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
           <button type="button" aria-pressed={mode === 'players'} onClick={() => selectMode(dataset, 'players')}>Players</button>
           <button type="button" aria-pressed={mode === 'teams'} onClick={() => selectMode(dataset, 'teams')}>Teams</button>
         </div>
-        <label className="desk-field">Dataset<select value={dataset} onChange={event => selectMode(event.target.value as typeof dataset, mode)}><option value="archive">Premier League · 2023/24</option><option value="demo">Premier Division · Demo</option></select></label>
+        <label className="desk-field">Dataset<select value={dataset} onChange={event => selectMode(event.target.value as typeof dataset, mode)}>{!demo && <option value="current">{matches[0]?.competition ?? 'Selected competition'} · {matches[0]?.season ?? '2026/27'}</option>}<option value="archive">Premier League · 2023/24 archive</option>{demo && <option value="demo">Premier Division · Rehearsal</option>}</select></label>
+        {periods.length > 1 && <label className="desk-field">Period<select value={period} onChange={event => {
+          const next = event.target.value
+          setPeriod(next)
+          setSelected(allSubjects.filter(subject => subject.period === next).slice(0, 3).map(subject => subject.id))
+          setPage(0)
+        }}>{periods.map(value => <option key={value} value={value}>{allSubjects.find(subject => subject.period === value)?.subtitle || value}</option>)}</select></label>}
         <label className="desk-search"><Search size={16} /><input aria-label="Search comparison subjects" value={search} onChange={event => setSearch(event.target.value)} placeholder={mode === 'players' ? 'Find a player' : 'Find a team'} /></label>
         {mode === 'players' && <div className="desk-field-row">
           <label className="desk-field">Club<select value={club} onChange={event => setClub(event.target.value)}><option value="">All clubs</option>{unique(subjects.map(subject => subject.club)).map(item => <option key={item}>{item}</option>)}</select></label>
@@ -110,7 +133,7 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
       {chosen.length < 2 || !rows.length
         ? <div className="desk-empty comparison-empty">{chosen.length < 2 ? 'Select at least two subjects to compare.' : 'Choose at least one metric to compare.'}</div>
         : presentation === 'table' ? <div className="desk-table-wrap">
-          <table className="desk-table comparison-table"><thead><tr><th scope="col">Metric</th>{chosen.map(subject => <th scope="col" key={subject.id} style={{ '--team-color': subject.color } as React.CSSProperties}><span>{subject.name}</span></th>)}</tr></thead><tbody>
+          <table className="desk-table comparison-table"><thead><tr><th scope="col">Metric</th>{chosen.map(subject => <th scope="col" key={subject.id} style={{ '--team-color': subject.color } as React.CSSProperties}><span>{subject.name}</span>{mode === 'players' && dataset === 'current' && <small>{subject.stats.minutes === undefined ? 'Minutes unavailable' : subject.stats.minutes + ' min'}</small>}</th>)}</tr></thead><tbody>
             {rows.map(row => <tr key={row.label}><th scope="row" title={row.detail}>{row.label}</th>{row.values.map((value, index) => <td key={chosen[index].id}>{value == null ? <span aria-label="Unavailable" title="Unavailable">—</span> : `${value}${row.unit || ''}`}</td>)}</tr>)}
           </tbody></table>
         </div> : <div className="data-ranking-bars">
@@ -122,8 +145,8 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
           })}
         </div>}
       <div className="data-comparison-sources">
-        <span className={archived ? 'desk-source-tag official' : 'desk-source-tag'}>{archived ? 'Official archive' : 'Demonstration data'}</span>
-        {archived && unique(chosen.map(subject => subject.source?.url)).map(url => <a key={url} href={url} target="_blank" rel="noreferrer">{new URL(url).hostname.replace(/^www\./, '')} <ArrowUpRight size={12} /></a>)}
+        <span className={archived ? 'desk-source-tag official' : 'desk-source-tag'}>{archived ? 'Official archive' : dataset === 'demo' ? 'Demonstration data' : 'Current season · sourced totals'}</span>
+        {dataset !== 'demo' && unique(chosen.map(subject => subject.source?.url)).map(url => <a key={url} href={url} target="_blank" rel="noreferrer">{new URL(url).hostname.replace(/^www\./, '')} <ArrowUpRight size={12} /></a>)}
         <span>— Unavailable</span>
       </div>
       <div className="desk-action-row">
@@ -133,8 +156,4 @@ export function ComparisonDesk({ onQueueGraphic }: { onQueueGraphic: (graphic: G
       </div>
     </section>
   </div>
-}
-function getSubjects(dataset: 'archive' | 'demo', mode: 'players' | 'teams') {
-  if (dataset === 'archive') return mode === 'players' ? officialPlayers : officialTeamStats
-  return mode === 'players' ? demoPlayerStats : demoTeamStats
 }

@@ -1,6 +1,10 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { SessionAction, SessionRole, SessionState } from '../src/session-types'
 import type { SessionRecord, SessionStore } from './session-store'
+import type { SessionAssetStore } from './session-asset-store'
+import type { Project } from '../src/domain.js'
+import { readableFrame } from './session-frame.js'
+import { activeSceneMedia, sceneFrameMatches, validMediaManifest } from '../src/media-reference.js'
 
 export const MAX_SESSION_BODY_BYTES = 1_048_576
 const LEASE_MS = 30_000
@@ -11,7 +15,7 @@ const roles = ['producer', 'presenter-a', 'presenter-b', 'viewer'] as const
 type Content = Record<string, unknown>
 type Waiter = () => void
 
-class SessionProblem extends Error {
+export class SessionProblem extends Error {
   constructor(readonly status: number, message: string) {
     super(message)
   }
@@ -56,7 +60,7 @@ async function readBody(request: Request): Promise<Content> {
   }
 }
 
-function authorize(record: SessionRecord, token: string): SessionRole {
+export function authorize(record: SessionRecord, token: string): SessionRole {
   if (tokenPattern.test(token)) {
     const candidate = Buffer.from(token)
     for (const role of roles) {
@@ -66,6 +70,14 @@ function authorize(record: SessionRecord, token: string): SessionRole {
   throw new SessionProblem(401, 'This session link is missing or invalid.')
 }
 
+export function readSessionCredentials(request: Request) {
+  const id = new URL(request.url).searchParams.get('id')
+  if (!id || !sessionIdPattern.test(id)) throw new SessionProblem(400, 'A valid studio session ID is required.')
+  const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/i)?.[1] ?? ''
+  if (!tokenPattern.test(token)) throw new SessionProblem(401, 'This session link is missing or invalid.')
+  return { id, token }
+}
+
 function activeLock(record: SessionRecord, now: number) {
   return record.lock && record.lock.expiresAt > now ? record.lock : null
 }
@@ -73,7 +85,7 @@ function activeLock(record: SessionRecord, now: number) {
 function state(record: SessionRecord, role: SessionRole, now: number): SessionState<Content> {
   const { id, revision, preview, live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt, tokens } = record
   return {
-    id, revision, role, preview, live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt,
+    id, revision, stageRevision: record.stageRevision ?? 0, role, preview, live, mode, access, updatedAt, previewUpdatedAt, liveUpdatedAt, heldAt,
     serverTime: now,
     lock: activeLock(record, now),
     ...(role === 'producer' ? { invites: {
@@ -124,6 +136,7 @@ function apply(record: SessionRecord, role: SessionRole, action: SessionAction<C
       next.preview = action.content
       next.previewUpdatedAt = now
       if (action.type === 'stage') {
+        next.stageRevision = next.revision
         next.mode = 'preview'
       } else if (record.mode === 'live') {
         next.live = action.content
@@ -142,6 +155,7 @@ function apply(record: SessionRecord, role: SessionRole, action: SessionAction<C
       if (!action.enabled && next.lock?.owner === action.role) next.lock = null
       break
     case 'preview':
+      next.stageRevision = next.revision
       next.mode = 'preview'
       break
     case 'take':
@@ -151,10 +165,12 @@ function apply(record: SessionRecord, role: SessionRole, action: SessionAction<C
       next.heldAt = null
       break
     case 'hold':
+      next.stageRevision = next.revision
       next.mode = 'hold'
       next.heldAt = record.heldAt ?? now
       break
     case 'clear':
+      next.stageRevision = next.revision
       next.mode = 'preview'
       next.live = null
       next.liveUpdatedAt = null
@@ -169,6 +185,8 @@ interface ServiceOptions {
   pollAfterMs?: number
   now?: () => number
   validateContent?: (value: Content) => boolean
+  contentError?: (value: Content) => string | undefined
+  assetStore?: SessionAssetStore
 }
 
 export function sessionService(store: SessionStore, options: ServiceOptions = {}) {
@@ -177,7 +195,49 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
 
   function checkContent(content: Content) {
     if (options.validateContent && !options.validateContent(content)) {
-      throw new SessionProblem(422, 'This board, cue or graphic is invalid and was withheld from the studio.')
+      throw new SessionProblem(422, options.contentError?.(content) ?? 'This board, cue or graphic is invalid and was withheld from the studio.')
+    }
+  }
+
+  async function checkFrames(id: string, content: Content, all: boolean, previous?: Content | null) {
+    const assets = options.assetStore
+    if (!assets) return
+    const manifest = content.mediaManifest
+    if (manifest !== undefined && !validMediaManifest(manifest)) throw new SessionProblem(422, 'The staged frame manifest is invalid.')
+    const project = content.project as Project
+    if (manifest && Object.entries(manifest).some(([sceneId, frame]) => {
+      const media = project.scenes.find(scene => scene.id === sceneId)?.media
+      return !media || !sceneFrameMatches(media, frame)
+    })) throw new SessionProblem(422, 'A staged frame belongs to a different scene or source file.')
+    const scenes = all ? project.scenes : project.scenes.filter(scene => scene.id === content.sceneId)
+    const previousProject = previous?.project as Project | undefined
+    const previousScene = previousProject?.scenes.find(scene => scene.id === previous?.sceneId)
+    const previousMedia = previousScene && activeSceneMedia(previousScene)
+    const previousManifest = validMediaManifest(previous?.mediaManifest) ? previous.mediaManifest : undefined
+    const previousFrame = previousScene && previousMedia ? previousManifest?.[previousScene.id] : undefined
+    const frames = new Map<string, { name: string; verify: boolean }>()
+    for (const scene of scenes) {
+      const media = scene.media
+      if (!media || (!all && scene.surface === 'pitch')) continue
+      // A legacy active-frame session still plays its existing live snapshot.
+      // Re-stage before taking or selecting any new media scene.
+      const frame = manifest?.[scene.id]
+      if (!sceneFrameMatches(media, frame) || !frame) {
+        throw new SessionProblem(422, `Restage “${scene.name}” with its source file before taking it to air.`)
+      }
+      const verify = scene.id === content.sceneId && !!activeSceneMedia(scene) && frame.key !== previousFrame?.key
+      if (verify || !frames.has(frame.key)) frames.set(frame.key, { name: scene.name, verify })
+    }
+    // Verify the bytes of a newly selected on-air frame. Other immutable
+    // files were validated during upload and only require existence checks.
+    for (const [key, { name, verify }] of frames) {
+      if (verify) {
+        if (!readableFrame(await assets.get(id, key), key)) {
+          throw new SessionProblem(422, `The staged frame for “${name}” is missing or unreadable. Restage the rundown.`)
+        }
+      } else if (!await assets.exists(id, key)) {
+        throw new SessionProblem(422, `The staged frame for “${name}” is missing. Restage the rundown.`)
+      }
     }
   }
 
@@ -232,12 +292,9 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
         return reply({ error: 'Only GET and POST are supported.' }, 405)
       }
       const url = new URL(request.url)
-      const id = url.searchParams.get('id')
       const body = request.method === 'POST' ? await readBody(request) : null
-      if (!id && body?.type === 'create') return await create(asObject(body.preview))
-      if (!id || !sessionIdPattern.test(id)) throw new SessionProblem(400, 'A valid studio session ID is required.')
-      const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/i)?.[1] ?? ''
-      if (!tokenPattern.test(token)) throw new SessionProblem(401, 'This session link is missing or invalid.')
+      if (!url.searchParams.has('id') && body?.type === 'create') return await create(asObject(body.preview))
+      const { id, token } = readSessionCredentials(request)
 
       let stored = await store.read(id, body ? 'write' : 'read')
       if (!stored) throw new SessionProblem(404, 'This studio session could not be found.')
@@ -273,7 +330,8 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
       }
 
       const action = parseAction(body.action)
-      const priority = role === 'producer' && (action.type === 'hold' || action.type === 'clear' ||
+      const takeStaged = role === 'producer' && action.type === 'take' && Number.isInteger(body.expectedStageRevision)
+      const priority = role === 'producer' && (takeStaged || action.type === 'hold' || action.type === 'clear' ||
         (action.type === 'access' && !action.enabled))
       const conflict = () => reply({
         error: 'Another device changed the studio. Review the latest state and retry.',
@@ -285,8 +343,16 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
       // of times if a different client writes between the read and the CAS.
       const attempts = priority ? 3 : 1
       for (let attempt = 0; attempt < attempts; attempt++) {
+        if (takeStaged && body.expectedStageRevision !== (record.stageRevision ?? 0)) return conflict()
         const next = apply(record, role, action, now())
-        if (action.type === 'update' || action.type === 'stage') checkContent(action.content)
+        const content = 'content' in action ? action.content : action.type === 'take' ? record.preview : undefined
+        if (content) {
+          checkContent(content)
+          if (!content.graphic || content.pip === true) {
+            if (action.type !== 'update') await checkFrames(id, content, true)
+            else if (record.mode === 'live') await checkFrames(id, content, false, record.live)
+          }
+        }
         if (await store.write(next, stored.version)) {
           waiters.get(id)?.forEach(notify => notify())
           return reply(state(next, role, now()))

@@ -7,6 +7,7 @@ export interface SessionRecord {
   schema: 1
   id: string
   revision: number
+  stageRevision?: number
   tokens: Record<SessionRole, string>
   preview: Record<string, unknown>
   live: Record<string, unknown> | null

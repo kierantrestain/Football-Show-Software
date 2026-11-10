@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { Pitch } from './Pitch'
 import type { Scene } from './domain'
+import { activeSceneMedia } from './media-reference'
 import { download } from './storage'
 import { decodeImage, loadSceneMedia, mediaDimensions, seekFrame } from './mediaDecode'
 
@@ -28,13 +29,14 @@ export async function exportScene(scene: Scene, time: number, cue: number, optio
   canvas.width = (options.orientation === '16:9' ? 1920 : 1080) * scale
   canvas.height = (options.orientation === '16:9' ? 1080 : 1920) * scale
   const ctx = canvas.getContext('2d')!
+  const source = activeSceneMedia(scene)
   let loaded: Awaited<ReturnType<typeof loadSceneMedia>>
   let media: HTMLImageElement | HTMLVideoElement | undefined
   const draw = async (timestamp: number) => {
-    const frame = scene.media?.frame ?? 0
+    const frame = source?.frame ?? 0
     if (media instanceof HTMLVideoElement && options.format !== 'png') await seekFrame(media, frame + timestamp)
     const mediaTime = media instanceof HTMLVideoElement ? media.currentTime : frame
-    flushSync(() => root.render(<Pitch scene={scene} time={timestamp} cueIndex={cue} clean transparent={options.transparent || !!media} media={!!scene.media} mediaTime={mediaTime} />))
+    flushSync(() => root.render(<Pitch scene={scene} time={timestamp} cueIndex={cue} clean transparent={options.transparent || !!media} media={!!source} mediaTime={mediaTime} />))
     const svg = host.querySelector('svg')
     if (!svg) throw new Error('The scene did not render.')
     const clone = svg.cloneNode(true) as SVGSVGElement
@@ -52,14 +54,15 @@ export async function exportScene(scene: Scene, time: number, cue: number, optio
         ctx.fillStyle = '#09130f'
         ctx.fillRect(0, 0, canvas.width, canvas.height)
       }
-      if (media) ctx.drawImage(media, ...box)
+      if (media && !options.transparent) ctx.drawImage(media, ...box)
       ctx.drawImage(image, ...box)
     } finally { URL.revokeObjectURL(url) }
   }
   const filename = scene.name.replace(/[^\w-]+/g, '-').toLowerCase()
   try {
-    loaded = await loadSceneMedia(options.transparent ? undefined : scene.media)
+    loaded = await loadSceneMedia(source)
     media = loaded?.media
+    if (source && !media) throw new Error('Restore the source file before exporting this still.')
     await draw(options.format === 'png' ? time : 0)
     if (options.format === 'png') {
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))

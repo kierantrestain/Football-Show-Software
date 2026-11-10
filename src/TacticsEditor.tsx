@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, useRef, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useState, useRef, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
 import {
   ArrowDown, ArrowLeftRight, ArrowRight, ArrowUp, ArrowUpRight, Circle, CircleDot, Copy, Crosshair,
   Eye, EyeOff, Focus, Goal, Layers, LockKeyhole, LockKeyholeOpen, MousePointer2, Move, Pencil,
-  RectangleHorizontal, RotateCcw, Ruler, ScanLine, Send, Settings2, Spline, Trash2, Triangle, Type, Users,
+  Play, RectangleHorizontal, RotateCcw, Ruler, ScanLine, Send, Settings2, Spline, Trash2, Triangle, Type, Users, X,
 } from 'lucide-react';
 import {
   applyFormation, applyPhase, attackDirection, clamp, defaultCurve, evaluateScene, formations, inkColors, mediaCalibration, objectOnSurface, onPitch, phases,
@@ -26,13 +26,14 @@ type Props = {
   mediaTime?: number;
   mediaControl?: ReactNode;
   onReconstruct?: (scene: Scene) => void;
+  onPreviewMovement?: (start: number) => void;
   transparent?: boolean;
 };
 
 const toolItems = [
-  ['select', 'Select', MousePointer2],
+  ['select', 'Move', MousePointer2],
   ['ball', 'Ball & possession', CircleDot],
-  ['run', 'Curved run', Spline],
+  ['run', 'Run', Spline],
   ['pass', 'Pass', Send],
   ['arrow', 'Arrow', ArrowUpRight],
   ['line', 'Defensive line', Move],
@@ -50,6 +51,9 @@ const extraItems = [
   ['number', 'Number label', Type],
 ] as const;
 const toolList = [...toolItems, ...extraItems];
+const primaryTools = ['select', 'pass', 'run', 'shot', 'spotlight'];
+const primaryItems = primaryTools.map(key => toolList.find(([name]) => name === key)!);
+const drawingItems = toolList.filter(([name]) => !primaryTools.includes(name));
 const toolLabel = (tool: Tool) => toolList.find(([key]) => key === tool)?.[1] ?? tool;
 const playerActions = new Set<Tool>(['run', 'dribble', 'press', 'recovery', 'support']);
 const ballActions = new Set<Tool>(['pass', 'shot']);
@@ -60,11 +64,12 @@ const isTyping = (element: EventTarget | null) => element instanceof HTMLElement
   ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName) || element.isContentEditable
 );
 
-type Anchor = { point: Point; target?: string };
+type Anchor = { point: Point; target?: string; actorId?: string; side?: Side };
 type Gesture =
   | { kind: 'players'; start: Point; selection: Set<string>; base: Scene; moved?: Scene }
   | { kind: 'object'; start: Point; object: TacticalObject; handle?: string; moved?: Scene }
   | { kind: 'ball'; start: Point; moved?: Scene }
+  | { kind: 'pick'; tool: 'ball' | 'spotlight'; start: Point; player: Player }
   | { kind: 'draw'; start: Anchor; down: Point; fromPending: boolean; points: Point[] };
 
 function pointAdd(point: Point, shift: Point): Point {
@@ -94,7 +99,7 @@ function objectFrom(tool: ObjectKind, a: Point, b: Point, id: string, freePoints
   const curved = ['run', 'dribble', 'press', 'recovery', 'support', 'shot'].includes(tool);
   return {
     id, kind: tool, points, curve: curved ? defaultCurve(a, b) : undefined,
-    color: tool === 'line' ? inkColors[4] : inkColors[0],
+    color: tool === 'line' ? inkColors[4] : tool === 'arrow' ? '#f4efe4' : inkColors[0],
     opacity: tool === 'zone' || tool === 'channel' ? .58 : .94,
     thickness: tool === 'freehand' ? .42 : .54,
     dashed: playerActions.has(tool) || tool === 'zone',
@@ -169,7 +174,7 @@ function InspectorField({ label, children }: { label: string; children: ReactNod
 
 const calibrationCorners = ['top left', 'top right', 'bottom right', 'bottom left'];
 
-export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPreview, media, mediaTime, mediaControl, onReconstruct, transparent = false }: Props) {
+export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPreview, media, mediaTime, mediaControl, onReconstruct, onPreviewMovement, transparent = false }: Props) {
   const [tool, setTool] = useState<Tool>('select');
   const [tab, setTab] = useState<Tab>('scene');
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
@@ -177,9 +182,11 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
   const [draft, setDraft] = useState<TacticalObject>();
   const [preview, setPreview] = useState<Scene>();
   const [showMore, setShowMore] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [details, setDetails] = useState(false);
   const [append, setAppend] = useState(false);
-  const [viewMedia, setViewMedia] = useState(true);
   const [mediaRatio, setMediaRatio] = useState(16 / 9);
+  const [mediaZoom, setMediaZoom] = useState(1);
   const [calibrationDraft, setCalibrationDraft] = useState<Point[]>();
   const [calibrationError, setCalibrationError] = useState('');
   const [mediaGuide, setMediaGuide] = useState(false);
@@ -188,9 +195,13 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
   const [keyValue, setKeyValue] = useState(1);
   const pointerReadout = useRef<HTMLSpanElement>(null);
   const mediaLayer = useRef<HTMLDivElement>(null);
+  const detailsId = useId();
+  const detailsButton = useRef<HTMLButtonElement>(null);
+  const detailsPane = useRef<HTMLElement>(null);
+  const detailsBody = useRef<HTMLDivElement>(null);
   const activeGesture = useRef<Gesture | undefined>(undefined);
   const effective = useMemo(() => evaluateScene(scene, time, cueIndex), [scene, time, cueIndex]);
-  const hasMedia = Boolean(media) && viewMedia;
+  const hasMedia = Boolean(media) && scene.surface !== 'pitch';
   const alignment = scene.media?.alignment;
   const calibration = useMemo(() => tryMediaCalibration(alignment), [alignment]);
   const alignmentFrame = scene.media?.alignmentFrame;
@@ -200,12 +211,15 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
   const selectedObject = surfaceObjects.find((object) => selection.has(object.id));
   const linkedPath = scene.paths.find((path) => path.objectId === selectedObject?.id && path.objectId);
   const selectedPlayers = scene.players.filter((player) => selection.has(player.id));
+  const selectedActor = effective.players.find((player) => player.id === selectedPlayer?.id);
+  const [stepError, setStepError] = useState('');
 
   const resetGesture = () => {
     activeGesture.current = undefined;
     setPending(undefined);
     setDraft(undefined);
     setPreview(undefined);
+    setStepError('');
   };
 
   useEffect(() => {
@@ -214,7 +228,10 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     setPending(undefined);
     setDraft(undefined);
     setPreview(undefined);
-    setViewMedia(true);
+    setDetails(false);
+    setShowMore(false);
+    setShowPresets(false);
+    setMediaZoom(1);
     setCalibrationDraft(undefined);
     setCalibrationError('');
     setMediaGuide(false);
@@ -225,6 +242,14 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     setCalibrationError('');
     setMediaGuide(false);
   }, [scene.media?.assetId]);
+
+  useEffect(() => {
+    detailsBody.current?.scrollTo(0, 0);
+  }, [tab, details]);
+
+  useEffect(() => {
+    if (details) detailsPane.current?.focus();
+  }, [details]);
 
   function removeSelected() {
     const ids = new Set(scene.objects.filter((object) => selection.has(object.id) && !object.locked).map((object) => object.id));
@@ -250,15 +275,22 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
 
   useEffect(() => {
     function handleKey(event: KeyboardEvent) {
-      if (isTyping(event.target)) return;
       if (event.key === 'Escape') {
+        if (details) {
+          setDetails(false);
+          detailsButton.current?.focus();
+          return;
+        }
         resetGesture();
         setCalibrationDraft(undefined);
         setCalibrationError('');
         setSelection(new Set());
         setTool('select');
         setShowMore(false);
+        setShowPresets(false);
+        return;
       }
+      if (isTyping(event.target)) return;
       if (event.key === 'Delete' || event.key === 'Backspace') {
         if (!selectedObject) return;
         event.preventDefault();
@@ -283,7 +315,14 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     setCalibrationError('');
     setTool(next);
     setShowMore(false);
-    if (next !== 'select') setTab('scene');
+    setShowPresets(false);
+    if (next === 'spotlight' && selectedActor && !hasMedia) {
+      editPlayer({ highlight: !selectedPlayer?.highlight });
+      setTool('select');
+    } else if (!hasMedia && selectedActor && (playerActions.has(next) || ballActions.has(next))) {
+      const anchor = movementAnchor(next, selectedActor);
+      if (anchor) setPending(anchor);
+    }
   }
 
   function selectPlayer(id: string, multi: boolean) {
@@ -293,25 +332,20 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     setSelection(next);
     const chosen = scene.players.find((player) => player.id === id);
     if (chosen && !multi) setTeam(chosen.side);
-    if (next.size) setTab('teams');
     return next;
   }
 
-  function drawStart(point: Point, clicked?: Player): Anchor {
-    if (pending) return pending;
-    if (playerActions.has(tool) && !hasMedia) {
-      const player = effective.players.find((entry) => entry.id === selectedPlayer?.id) ?? clicked;
-      return player ? { point: player, target: player.id } : { point };
-    }
-    if (ballActions.has(tool) && !hasMedia) {
-      const from = effective.players.find((player) => player.id === selectedPlayer?.id);
-      return { point: from && from.id !== effective.ball.ownerId ? from : effective.ball, target: 'ball' };
-    }
-    return { point };
+  function movementAnchor(next: Tool, actor: Player): Anchor | undefined {
+    if (playerActions.has(next)) return { point: actor, target: actor.id, actorId: actor.id, side: actor.side };
+    if (effective.ball.ownerId && effective.ball.ownerId !== actor.id) return undefined;
+    return {
+      point: effective.ball.ownerId === actor.id ? effective.ball : actor,
+      target: 'ball', actorId: actor.id, side: actor.side,
+    };
   }
 
   function startGesture(event: PointerEvent<SVGSVGElement>) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || !event.isPrimary) return;
     const point = pitchCoordinates(event, effective, hasMedia);
     if (calibrationDraft && scene.media && hasMedia) {
       const corners = [...calibrationDraft, point];
@@ -338,9 +372,7 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     event.currentTarget.setPointerCapture(event.pointerId);
     if (tool === 'ball' && !hasMedia) {
       if (player) {
-        onChange({ ...scene, ball: { x: player.x, y: player.y, ownerId: player.id } });
-        setSelection(new Set([player.id]));
-        setTab('teams');
+        activeGesture.current = { kind: 'pick', tool: 'ball', start: point, player };
       } else {
         const moved = { ...scene, ball: point };
         activeGesture.current = { kind: 'ball', start: point, moved };
@@ -350,7 +382,24 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
       return;
     }
     if (tool !== 'select' && tool !== 'ball') {
-      const start = drawStart(point, player);
+      if (!pending && !hasMedia && (playerActions.has(tool) || ballActions.has(tool) || tool === 'spotlight')) {
+        if (!player) return;
+        if (tool === 'spotlight') {
+          activeGesture.current = { kind: 'pick', tool: 'spotlight', start: point, player };
+          return;
+        }
+        selectPlayer(player.id, false);
+        const anchor = movementAnchor(tool, player);
+        if (!anchor) {
+          setStepError('Select the ball carrier.');
+          return;
+        }
+        setStepError('');
+        setPending(anchor);
+        activeGesture.current = { kind: 'draw', start: anchor, down: point, fromPending: false, points: [point] };
+        return;
+      }
+      const start = pending ?? { point };
       activeGesture.current = { kind: 'draw', start, down: point, fromPending: Boolean(pending), points: [point] };
       return;
     }
@@ -359,7 +408,6 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
       const current = multi || !selection.has(player.id) ? selectPlayer(player.id, multi) : selection;
       if (current.has(player.id)) {
         activeGesture.current = { kind: 'players', start: point, base: effective, selection: current };
-        setTab('teams');
       }
       return;
     }
@@ -375,7 +423,6 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
       return;
     }
     setSelection(new Set());
-    setTab('scene');
   }
 
   function moveGesture(event: PointerEvent<SVGSVGElement>) {
@@ -391,6 +438,7 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
       if (pending && tool !== 'select' && tool !== 'ball') setDraft(objectFrom(tool, pending.point, point, 'draft'));
       return;
     }
+    if (gesture.kind === 'pick') return;
     if (gesture.kind === 'draw') {
       if (tool === 'select' || tool === 'ball') return;
       const last = gesture.points[gesture.points.length - 1];
@@ -425,19 +473,32 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
   function finishDrawing(gesture: Extract<Gesture, { kind: 'draw' }>, point: Point, playerId?: string) {
     if (tool === 'select' || tool === 'ball') return;
     const dragged = Math.hypot(point.x - gesture.down.x, point.y - gesture.down.y) > 1.2;
+    const spot = tool === 'spotlight' && hasMedia && !gesture.fromPending && !dragged;
     if (tool === 'freehand' && !dragged && gesture.points.length < 3) {
       setDraft(undefined);
       return;
     }
-    if (!dragged && !gesture.fromPending && !labelTools.has(tool) && tool !== 'freehand' &&
-      !(ballActions.has(tool) && !hasMedia && Math.hypot(point.x - gesture.start.point.x, point.y - gesture.start.point.y) > 3) &&
-      !(playerActions.has(tool) && selectedPlayer && gesture.start.target === selectedPlayer.id && Math.hypot(point.x - gesture.start.point.x, point.y - gesture.start.point.y) > 3)) {
+    if (!dragged && !gesture.fromPending && !labelTools.has(tool) && !spot && tool !== 'freehand') {
       setPending(gesture.start);
       return;
     }
-    const receiver = ballActions.has(tool) && playerId && playerId !== selectedPlayer?.id && !hasMedia
+    const receiver = tool === 'pass' && playerId && playerId !== gesture.start.actorId && !hasMedia
       ? effective.players.find((item) => item.id === playerId) : undefined;
-    const destination = receiver ?? point;
+    if (tool === 'pass' && !hasMedia && playerId === gesture.start.actorId) {
+      setStepError('Choose a different teammate or open space.');
+      setDraft(undefined);
+      return;
+    }
+    if (receiver && receiver.side !== gesture.start.side) {
+      setStepError('Choose a teammate or open space.');
+      setDraft(undefined);
+      return;
+    }
+    const destination = spot ? onPitch({ x: point.x + (point.x > 100 ? -5 : 5), y: point.y }) : receiver ?? point;
+    if (!labelTools.has(tool) && Math.hypot(destination.x - gesture.start.point.x, destination.y - gesture.start.point.y) < .55) {
+      setDraft(undefined);
+      return;
+    }
     const object: TacticalObject = {
       ...objectFrom(tool, gesture.start.point, destination, uid(), gesture.points),
       space: hasMedia ? 'media' : 'pitch',
@@ -458,9 +519,11 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     });
     setPending(undefined);
     setDraft(undefined);
+    setStepError('');
     setSelection(new Set([object.id]));
     setTool('select');
     setTab('objects');
+    if (details) setDetails(false);
   }
 
   function endGesture(event: PointerEvent<SVGSVGElement>) {
@@ -473,8 +536,20 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
       finishDrawing(gesture, pitchCoordinates(event, effective, hasMedia), hit?.closest('[data-player-id]')?.getAttribute('data-player-id') ?? undefined);
       return;
     }
+    if (gesture.kind === 'pick') {
+      const point = pitchCoordinates(event, effective, hasMedia);
+      if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) <= 3) keyboardPlayer(gesture.player.id);
+      return;
+    }
     setPreview(undefined);
-    if (!gesture.moved) return;
+    if (!gesture.moved) {
+      if (!hasMedia && gesture.kind === 'object' && gesture.handle && gesture.handle !== 'curve') {
+        const at = pitchCoordinates(event, effective);
+        const player = effective.players.find(item => Math.hypot(at.x - item.x, at.y - item.y) < 1.6);
+        if (player) selectPlayer(player.id, append);
+      }
+      return;
+    }
     if (gesture.kind === 'players') {
       onChange(savePlayerMove(scene, gesture.moved, time));
     } else if (gesture.kind === 'ball' && time > .02) {
@@ -548,8 +623,72 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
     onChange({ ...scene, players: scene.players.map((player) => player.id === selectedPlayer.id ? { ...player, ...patch } : player) });
   }
 
+  function keyboardPlayer(id: string) {
+    const player = effective.players.find(item => item.id === id);
+    if (!player) return;
+    if (tool === 'select') {
+      selectPlayer(id, append);
+      return;
+    }
+    if (tool === 'ball') {
+      onChange({ ...scene, ball: { x: player.x, y: player.y, ownerId: player.id } });
+      selectPlayer(id, false);
+      setTool('select');
+      return;
+    }
+    if (tool === 'spotlight') {
+      onChange({ ...scene, players: scene.players.map(item => item.id === id ? { ...item, highlight: !item.highlight } : item) });
+      selectPlayer(id, false);
+      setTool('select');
+      return;
+    }
+    if (!playerActions.has(tool) && !ballActions.has(tool)) return;
+    if (pending) {
+      finishDrawing({ kind: 'draw', start: pending, down: player, fromPending: true, points: [player] }, player, id);
+      return;
+    }
+    const anchor = movementAnchor(tool, player);
+    if (anchor) {
+      setPending(anchor);
+      setStepError('');
+      selectPlayer(id, false);
+    } else setStepError('Select the ball carrier.');
+  }
+
+  function showDetails(next: Tab = selectedObject ? 'objects' : selectedPlayer ? 'teams' : 'scene') {
+    setShowMore(false);
+    setShowPresets(false);
+    if (details) {
+      setDetails(false);
+      return;
+    }
+    setTab(next);
+    setDetails(true);
+  }
+
+  function setSurface(surface: 'pitch' | 'media') {
+    changeTool('select');
+    setSelection(new Set());
+    setDetails(false);
+    onChange({ ...scene, surface });
+  }
+
+  function setPiece(kind: 'corner' | 'free kick') {
+    const shaped = applyPhase(scene, 'Set pieces', team);
+    const direction = attackDirection(shaped, team);
+    const spot = kind === 'corner' ? { x: direction === 1 ? 104.4 : .6, y: direction === 1 ? .6 : 67.4 }
+      : { x: direction === 1 ? 76 : 29, y: 29 };
+    const taker = shaped.players.filter(player => player.side === team && player.role !== 'GK')
+      .sort((a, b) => Math.hypot(a.x - spot.x, a.y - spot.y) - Math.hypot(b.x - spot.x, b.y - spot.y))[0];
+    const players = shaped.players.map(player => player.id === taker?.id
+      ? { ...player, ...onPitch({ x: spot.x - direction * 1.3, y: spot.y + (spot.y < 34 ? 1.3 : -1.3) }) } : player);
+    const paths = shaped.paths.filter(path => path.target !== 'ball' && !players.some(player => player.side === team && player.id === path.target));
+    onChange({ ...shaped, players, ball: spot, paths });
+    setShowPresets(false);
+  }
+
   function shiftTeam(x: number, y: number) {
-    const group = selectedPlayers.length > 1 ? selectedPlayers : effective.players.filter((player) => player.side === team && player.position !== 'GK');
+    const group = selectedPlayers.length > 1 ? selectedPlayers : effective.players.filter((player) => player.side === team && player.role !== 'GK');
     const ids = new Set(group.map((player) => player.id));
     const shifted = translatePlayers(effective.players, ids, { x, y });
     const paths = group.flatMap((player) => {
@@ -575,52 +714,114 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
 
   const selectedPath = preview?.paths.length === 0 && activeGesture.current?.kind === 'players';
   const pitchScene = preview ?? scene;
-  const toolName = toolLabel(tool);
+  const toolName = hasMedia && tool === 'run' ? 'Run mark' : toolLabel(tool);
   const cue = scene.cues[cueIndex ?? 0];
   const [viewTag] = viewNames[effective.view].split(' ');
   const currentTeam = team === 'home' ? match.home : match.away;
   const teamPlayers = scene.players.filter((player) => player.side === team);
+  const canvasSelection = tool === 'select' ? selection : new Set(selectedPlayers.map(player => player.id));
+  const actor = pending?.actorId ? effective.players.find(player => player.id === pending.actorId) : undefined;
+  const footage = scene.media?.type === 'video';
+  function interactionStep() {
+    if (stepError) return stepError;
+    if (tool === 'select') {
+      if (selectedObject) return `${linkedPath ? 'Playable ' : ''}${toolLabel(selectedObject.kind).toLowerCase()} selected`;
+      if (selectedPlayers.length > 1) return `${selectedPlayers.length} players selected`;
+      return selectedPlayer?.name || (hasMedia ? 'Select a mark to edit' : 'Select or drag a player');
+    }
+    if (tool === 'ball') return 'Choose a player or place the ball';
+    if (!hasMedia && ballActions.has(tool)) {
+      if (!actor) return 'Select the ball carrier';
+      return `${actor.name} · ${tool === 'pass' ? 'choose a teammate or open space' : 'choose a shot destination'}`;
+    }
+    if (!hasMedia && playerActions.has(tool)) return actor ? `${actor.name} · choose a destination` : 'Choose a player, then a destination';
+    if (tool === 'spotlight') return hasMedia ? 'Tap the area to spotlight' : 'Choose a player to spotlight';
+    if (labelTools.has(tool)) return 'Choose a position for the label';
+    return pending ? 'Choose the end point' : 'Drag or tap two points';
+  }
 
   return <section className="tactics-workspace" aria-label="Tactics editor">
-    <div className="tac-rail" role="toolbar" aria-label="Tactical tools">
-      {toolItems.map(([item, label, Icon], index) => <div key={item} className={index === 2 || index === 5 || index === 8 ? 'tac-tool-group' : undefined}>
-        <IconButton label={label} onClick={() => changeTool(item)} active={tool === item} disabled={hasMedia && item === 'ball'}><Icon size={17} strokeWidth={1.7} /></IconButton>
-      </div>)}
-      <div className="tac-tool-group tac-more-wrap">
-        <IconButton label="More tools" onClick={() => setShowMore(!showMore)} active={showMore || extraItems.some(([item]) => item === tool)}><Settings2 size={17} strokeWidth={1.7} /></IconButton>
-        {showMore && <div className="tac-more-menu" aria-label="Additional tactical tools">
-          {extraItems.map(([item, label, Icon]) => <button type="button" key={item} onClick={() => changeTool(item)} className={tool === item ? 'is-active' : ''}>
-            <Icon size={15} strokeWidth={1.65} /><span>{label}</span>
-          </button>)}
-        </div>}
-      </div>
-      <div className="tac-rail-end"><IconButton label="Toggle multiple selection" onClick={() => { setAppend(!append); changeTool('select'); }} active={append}><Layers size={16} strokeWidth={1.6} /></IconButton></div>
-    </div>
     <div className={`tac-monitor ${hasMedia && (calibrationDraft || calibration) ? 'has-calibration' : ''}`}>
       <div className="tac-monitor-bar">
-        <div className="tac-monitor-title"><i /> <span>{hasMedia ? 'TELESTRATION' : 'TACTICAL PREVIEW'}</span></div>
+        <div className="tac-surface-picker" role="group" aria-label="Editing surface">
+          <button type="button" aria-pressed={!hasMedia} onClick={() => { if (hasMedia) setSurface('pitch'); }}>Pitch</button>
+          <button type="button" aria-pressed={hasMedia} disabled={!media} onClick={() => { if (!hasMedia) setSurface('media'); }}>{footage ? 'Footage' : 'Still'}</button>
+        </div>
+        <div className="tac-media-controls">{mediaControl}</div>
         <div className="tac-monitor-controls">
-          {mediaControl}
-          {media && <button type="button" onClick={() => {
-            changeTool('select');
-            setSelection(new Set());
-            setViewMedia(!viewMedia);
-          }}>{viewMedia ? 'Show pitch' : 'Show media'}</button>}
           {hasMedia && <IconButton label="Align footage" onClick={beginCalibration} active={Boolean(calibrationDraft)}><ScanLine size={15} strokeWidth={1.7} /></IconButton>}
-          <label className="tac-camera">
+          {hasMedia ? <label className="tac-camera">
             <Focus size={14} strokeWidth={1.7} />
-            <select aria-label="Pitch camera" value={effective.view} disabled={hasMedia} onChange={(event) => setCamera({ view: event.target.value as PitchView })}>
+            <select aria-label="Still view zoom" title="Editor framing only" value={mediaZoom} onChange={(event) => setMediaZoom(Number(event.target.value))}>
+              <option value={1}>Fit image</option><option value={1.25}>Centre 125%</option><option value={1.5}>Centre 150%</option>
+            </select>
+          </label> : <label className="tac-camera">
+            <Focus size={14} strokeWidth={1.7} />
+            <select aria-label="Pitch camera" value={effective.view} onChange={(event) => setCamera({ view: event.target.value as PitchView })}>
               {Object.entries(viewNames).map(([value, title]) => <option key={value} value={value}>{title}</option>)}
             </select>
-          </label>
-          <IconButton label="Rotate pitch" disabled={hasMedia} onClick={() => setCamera({ orientation: effective.orientation === 'horizontal' ? 'vertical' : 'horizontal' })}>
+          </label>}
+          {!hasMedia && <IconButton label="Rotate pitch" onClick={() => setCamera({ orientation: effective.orientation === 'horizontal' ? 'vertical' : 'horizontal' })}>
             <RotateCcw size={14} strokeWidth={1.7} />
-          </IconButton>
+          </IconButton>}
         </div>
       </div>
+      <div className="tac-tooldeck">
+      <div className="tac-rail" role="group" aria-label="Tactical tools">
+        {primaryItems.flatMap(([name, label, Icon]) => {
+          if (hasMedia && (name === 'pass' || name === 'shot')) return [];
+          return <button type="button" className="tac-primary-tool" key={name} aria-pressed={tool === name || (name === 'spotlight' && !!selectedPlayer?.highlight)}
+            onClick={() => changeTool(name)}><Icon size={17} strokeWidth={1.8} />{hasMedia && name === 'run' ? 'Run mark' : label}</button>;
+        })}
+        <div className="tac-more-wrap">
+          <button type="button" className="tac-primary-tool" aria-expanded={showMore}
+            onClick={() => { setShowPresets(false); setDetails(false); setShowMore(!showMore); }}><Pencil size={16} />Draw</button>
+          {showMore && <div className="tac-more-menu" aria-label="Drawing and ball tools">
+            {drawingItems.filter(([name]) => !hasMedia || !['ball', 'dribble', 'press', 'recovery', 'support'].includes(name))
+              .map(([name, label, Icon]) => <button type="button" key={name} onClick={() => changeTool(name)} className={tool === name ? 'is-active' : ''}>
+                <Icon size={15} strokeWidth={1.65} /><span>{label}</span>
+              </button>)}
+          </div>}
+        </div>
+        {!hasMedia && <div className="tac-more-wrap">
+          <button type="button" className="tac-primary-tool" aria-expanded={showPresets}
+            onClick={() => { setShowMore(false); setDetails(false); setShowPresets(!showPresets); }}><Layers size={16} />Presets</button>
+          {showPresets && <div className="tac-more-menu tac-presets" aria-label="Team presets">
+            <div className="tac-preset-teams"><span>Apply to</span>{(['home', 'away'] as const).map(side =>
+              <button type="button" key={side} aria-pressed={team === side} onClick={() => setTeam(side)}>{side === 'home' ? match.homeShort : match.awayShort}</button>)}</div>
+            {(['High press', 'Mid-block', 'Low block'] as const).map(phase => <button type="button" key={phase}
+              onClick={() => { onChange(applyPhase(scene, phase, team)); setShowPresets(false); }}>{phase}</button>)}
+            <button type="button" onClick={() => { shiftTeam(6 * attackDirection(scene, team), 0); setShowPresets(false); }}>Step up</button>
+            <button type="button" onClick={() => { shiftTeam(0, 6); setShowPresets(false); }}>Shift across</button>
+            <button type="button" onClick={() => setPiece('corner')}>Corner</button>
+            <button type="button" onClick={() => setPiece('free kick')}>Free kick</button>
+          </div>}
+        </div>}
+        <div className="tac-rail-end">
+          {!hasMedia && <button type="button" className="tac-primary-tool" aria-label="Toggle multiple selection" aria-pressed={append}
+            onClick={() => { setAppend(!append); changeTool('select'); }}><Users size={16} />Group</button>}
+          <button type="button" className="tac-primary-tool" ref={detailsButton} aria-expanded={details} aria-controls={detailsId} onClick={() => showDetails()}>
+            <Settings2 size={16} />Details
+          </button>
+        </div>
+      </div>
+      <div className="tac-step">
+        <div role="status" className="tac-step-label"><strong>{toolName}</strong> <span>{interactionStep()}</span></div>
+        <div className="tac-step-actions">
+          {tool !== 'select' && <button type="button" onClick={() => changeTool('select')}>Cancel</button>}
+          {selectedObject && tool === 'select' && curvable.has(selectedObject.kind) && selectedObject.points.length === 2 && <>
+            <button type="button" disabled={selectedObject.locked} aria-pressed={Boolean(selectedObject.curve)} onClick={() => editObject({
+              curve: selectedObject.curve ? undefined : defaultCurve(selectedObject.points[0], selectedObject.points[1]),
+            })}><Spline size={15} />Curve</button>
+            <button type="button" disabled={selectedObject.locked} onClick={reverseObject}><ArrowLeftRight size={15} />Reverse</button>
+          </>}
+          {linkedPath && tool === 'select' && onPreviewMovement && <button type="button" onClick={() => onPreviewMovement(linkedPath.start)}><Play size={15} />Preview move</button>}
+        </div>
+      </div>
+      </div>
       <div className="tac-screen">
-        <div className="tac-screen-corner" aria-hidden="true"><span>{hasMedia ? 'MEDIA' : 'FIELD 01'}</span><i /></div>
-        <div className={`tac-canvas ${hasMedia ? 'is-media' : ''} ${tool === 'select' && !calibrationDraft ? 'is-select' : ''}`} style={{ '--media-ratio': mediaRatio } as CSSProperties}>
+        <div className={`tac-canvas ${hasMedia ? 'is-media' : ''} ${tool === 'select' && !calibrationDraft ? 'is-select' : ''}`}
+          style={{ '--media-ratio': mediaRatio, '--media-zoom': mediaZoom } as CSSProperties}>
           {hasMedia && <div className="tac-media-layer" ref={mediaLayer} onLoadCapture={(event) => {
             const image = event.target;
             if (image instanceof HTMLImageElement && image.naturalHeight) setMediaRatio(image.naturalWidth / image.naturalHeight);
@@ -630,13 +831,10 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
           }}>{media}</div>}
           <Pitch scene={pitchScene} time={selectedPath ? 0 : time} cueIndex={cueIndex} className="tac-svg" media={hasMedia} mediaTime={mediaTime}
             mediaGuide={mediaGuide && onAlignedFrame} calibrationDraft={calibrationDraft}
-            selected={selection} transparent={transparent && !media} draft={draft} onPointerDown={startGesture} onPointerMove={moveGesture}
-            onPointerUp={endGesture} onPointerCancel={resetGesture} onPlayerSelect={(id) => selectPlayer(id, append)} />
+            selected={canvasSelection} transparent={transparent && !media} draft={draft} onPointerDown={startGesture} onPointerMove={moveGesture}
+            onPointerUp={endGesture} onPointerCancel={() => changeTool('select')}
+            onLostPointerCapture={() => { if (activeGesture.current) changeTool('select'); }} onPlayerSelect={keyboardPlayer} />
         </div>
-        {tool !== 'select' && <div className="tac-tool-tip">
-          <span>{toolName}</span>
-          {tool === 'ball' ? 'Choose a player or place the ball' : pending ? 'Choose the end point' : playerActions.has(tool) && !selectedPlayer && !hasMedia ? 'Choose a player, then a destination' : labelTools.has(tool) ? 'Place the label on the canvas' : 'Drag or click to draw'}
-        </div>}
       </div>
       {hasMedia && (calibrationDraft || calibration) && <div className="tac-calibration" aria-label="Footage calibration">
         {calibrationDraft ? <>
@@ -655,15 +853,17 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
         <span className="tac-pitch-meta"><span key={hasMedia ? 'media' : 'pitch'} ref={pointerReadout}>{hasMedia ? 'MEDIA OVERLAY' : '105 × 68 M'}</span> <span>·</span> {viewTag.toUpperCase()}</span>
       </div>
     </div>
-    <aside className="tac-inspector" aria-label="Tactics inspector">
-      <div className="tac-inspector-heading"><Settings2 size={15} strokeWidth={1.7} /><span>Inspector</span></div>
+    <aside className="tac-inspector" id={detailsId} ref={detailsPane} tabIndex={-1} aria-label="Tactics details" hidden={!details}>
+      <div className="tac-inspector-heading"><Settings2 size={16} strokeWidth={1.7} /><span>Details</span>
+        <IconButton label="Close details" onClick={() => { setDetails(false); detailsButton.current?.focus(); }}><X size={17} /></IconButton>
+      </div>
       <div className="tac-tabs" aria-label="Inspector views">
         {(['scene', 'teams', 'objects'] as const).map((item) => <button type="button" key={item}
           aria-pressed={item === tab} onClick={() => setTab(item)} className={item === tab ? 'is-active' : ''}>
           {item[0].toUpperCase() + item.slice(1)}{item === 'objects' && <small>{surfaceObjects.length}</small>}
         </button>)}
       </div>
-      <div className="tac-inspector-body">
+      <div className="tac-inspector-body" ref={detailsBody}>
         {tab === 'scene' && <>
           <div className="tac-inspector-section">
             <div className="tac-eyebrow">SCENE PROPERTIES</div>
@@ -722,17 +922,20 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
             </div>
           </div>
           {selectedPlayer && <div className="tac-inspector-section">
-            <div className="tac-eyebrow">{selectedPlayers.length > 1 ? `${selectedPlayers.length} PLAYERS SELECTED` : `PLAYER · #${selectedPlayer.number}`}</div>
-            <InspectorField label="Player name"><input value={selectedPlayer.name} onChange={(event) => editPlayer({ name: event.target.value })} /></InspectorField>
+            <div className="tac-eyebrow">{selectedPlayers.length > 1 ? `${selectedPlayers.length} PLAYERS SELECTED` : selectedPlayer.number === undefined ? 'PLAYER' : `PLAYER · #${selectedPlayer.number}`}</div>
+            {scene.roster ? <p className="tac-player-record">{selectedPlayer.name} <span>{selectedPlayer.position}</span></p>
+              : <InspectorField label="Player name"><input value={selectedPlayer.name} onChange={(event) => editPlayer({ name: event.target.value })} /></InspectorField>}
             <div className="tac-pair">
-              <InspectorField label="Number"><input type="number" min={0} max={99} value={selectedPlayer.number} onChange={(event) => editPlayer({ number: clamp(Number(event.target.value), 0, 99) })} /></InspectorField>
+              {!scene.roster && <InspectorField label="Number"><input type="number" min={0} max={99} value={selectedPlayer.number ?? ''} onChange={(event) => editPlayer({
+                number: event.target.value === '' ? undefined : clamp(Number(event.target.value), 0, 99),
+              })} /></InspectorField>}
               <InspectorField label="Role"><input value={selectedPlayer.role} onChange={(event) => editPlayer({ role: event.target.value })} /></InspectorField>
             </div>
             <div className="tac-actions">
               <button type="button" onClick={() => editPlayer({ highlight: !selectedPlayer.highlight })}><Focus size={13} />{selectedPlayer.highlight ? 'Unhighlight' : 'Highlight'}</button>
               <button type="button" onClick={() => onChange({ ...scene, ball: { x: selectedPlayer.x, y: selectedPlayer.y, ownerId: selectedPlayer.id } })}><CircleDot size={13} />Give ball</button>
             </div>
-            <button type="button" className="tac-wide-action" onClick={() => {
+            {!scene.roster && <button type="button" className="tac-wide-action" onClick={() => {
               const players = scene.players.map((player) => player.id === selectedPlayer.id ? { ...player, id: uid(), name: 'Substitute', highlight: false } : player);
               const substitute = players[scene.players.indexOf(selectedPlayer)];
               onChange({
@@ -743,13 +946,13 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
                 substitutions: [...(scene.substitutions ?? []), { outgoing: selectedPlayer, incomingId: substitute.id, time }],
               });
               setSelection(new Set([substitute.id]));
-            }}>Make substitution</button>
+            }}>Make substitution</button>}
           </div>}
           <div className="tac-inspector-section">
             <div className="tac-eyebrow">ON THE PITCH <span>{teamPlayers.length}</span></div>
             <div className="tac-roster">{teamPlayers.map((player) => <button type="button" key={player.id} className={selection.has(player.id) ? 'is-active' : ''}
               onClick={(event) => selectPlayer(player.id, event.shiftKey || append)}>
-              <b style={{ background: teamColors[player.side] }}>{player.number}</b><span>{player.name}</span><small>{player.position}</small>
+              <b style={{ background: teamColors[player.side] }}>{player.number ?? '—'}</b><span>{player.name}</span><small>{player.role}</small>
             </button>)}</div>
           </div>
         </>}
@@ -824,7 +1027,7 @@ export function TacticsEditor({ scene, match, time = 0, cueIndex, onChange, onPr
             </div>
             <button type="button" className="tac-wide-action" disabled={selectedObject.locked} onClick={recordGraphicKey}>Save keyframe</button>
           </div>}
-          {hasMedia && selectedObject && <div className="tac-inspector-section">
+          {hasMedia && footage && selectedObject && <div className="tac-inspector-section">
             <div className="tac-eyebrow">FOOTAGE RANGE</div>
             <div className="tac-pair">
               <InspectorField label="Show from (s)"><input type="number" min={0} step={.1} value={selectedObject.mediaIn ?? ''}

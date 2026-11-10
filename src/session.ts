@@ -60,6 +60,15 @@ export async function createSession<T>(preview: T): Promise<{ credentials: Sessi
   return await response.json()
 }
 
+export async function commitSessionAction<T>(credentials: SessionCredentials, action: SessionAction<T>, expectedRevision: number) {
+  const response = await studioFetch(sessionRequest(credentials), {
+    method: 'POST', headers: { ...authHeaders(credentials.token), 'content-type': 'application/json' },
+    body: JSON.stringify({ action, expectedRevision }),
+  }, 45_000)
+  if (!response.ok) throw await sessionError(response)
+  return await response.json() as SessionState<T>
+}
+
 interface Snapshot<T> {
   key: string
   state: SessionState<T> | null
@@ -227,8 +236,10 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
       const response = await studioFetch(sessionRequest({ id, token }), {
         method: 'POST',
         headers: { ...authHeaders(token), 'content-type': 'application/json' },
-        body: JSON.stringify({ action, expectedRevision: client.latest.revision }),
-      }, 12_000, client.controller.signal)
+        body: JSON.stringify({ action, expectedRevision: client.latest.revision,
+          ...(action.type === 'take' ? { expectedStageRevision: client.latest.stageRevision ?? 0 } : {}),
+        }),
+      }, action.type === 'stage' || action.type === 'take' ? 45_000 : 12_000, client.controller.signal)
       if (response.ok) {
         client.accept(await response.json() as SessionState<T>)
         client.report('connected', null)

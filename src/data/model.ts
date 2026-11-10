@@ -1,11 +1,17 @@
-export type Source = {
-  kind: 'demo' | 'provider' | 'official'
-  label: string
-  url?: string
-  updatedAt?: string
-}
+import type { FixtureSnapshot, FixtureStatus, FixtureVerification, Score, Source } from './fixtureSnapshot'
+export type { Source } from './fixtureSnapshot'
 
-export type LineupPlayer = { name: string; number: number; position: string; id?: string }
+export type LineupPlayer = {
+  name: string
+  number?: number
+  position: string
+  role?: string
+  id?: string
+  source?: Source
+  eligibleFrom?: string
+  eligibleUntil?: string
+}
+export type LineupKind = 'confirmed' | 'squad' | 'repair' | 'demo'
 export type Team = {
   id: string
   name: string
@@ -14,12 +20,19 @@ export type Team = {
   formation: string
   players: LineupPlayer[]
   bench?: LineupPlayer[]
+  squad?: LineupPlayer[]
+  eligible?: LineupPlayer[]
+  lineupSource?: Source
+  providerId?: string
+  lineupKind?: LineupKind
 }
 
 export type Moment = {
   id: string
   minute: number
   extra?: number
+  order?: number
+  source?: Source
   kind: 'Goal' | 'Shot' | 'Save' | 'Press' | 'Substitution' | 'Card' | 'Set piece'
   title: string
   description: string
@@ -33,10 +46,18 @@ export type Match = {
   competition: string
   season: string
   kickoff: string
-  status: 'scheduled' | 'live' | 'finished' | 'postponed'
+  status: FixtureStatus
+  competitionId?: string
+  providerId?: string
+  revision?: string
   home: Team
   away: Team
-  score?: [number, number]
+  score?: Score
+  shootout?: Score
+  period?: FixtureSnapshot['period']
+  clock?: FixtureSnapshot['clock']
+  verification?: FixtureVerification
+  fixture?: FixtureSnapshot
   venue?: string
   round?: number
   source: Source
@@ -64,6 +85,10 @@ export type LoadTacticsPayload = {
   home: Team
   away: Team
   moment?: Moment
+  fixture?: FixtureSnapshot
+  lineupKind?: LineupKind
+  homeDismissed?: string[]
+  awayDismissed?: string[]
   classification: 'RECONSTRUCTED' | 'HYPOTHETICAL'
   source: string
 }
@@ -75,6 +100,7 @@ export type ComparisonSubject = {
   club?: string
   position?: string
   stats: Record<string, number>
+  period?: string
   source?: Source
 }
 export type Metric = {
@@ -93,6 +119,7 @@ export type GraphicSpec = {
   source: string
   teams?: { name: string; shortName: string; color: string; formation?: string }[]
   score?: [number, number]
+  fixture?: FixtureSnapshot
   lineup?: LineupPlayer[]
   subjects?: { name: string; subtitle: string; color: string }[]
   rows?: { label: string; value?: string; detail?: string; values?: (number | null)[]; unit?: string }[]
@@ -120,15 +147,44 @@ export function predictionCutoff(kickoff: string, rules: PredictionRules) {
   return new Date(new Date(kickoff).getTime() - rules.cutoffMinutes * 60_000)
 }
 
-export function applyMoment(team: Team, moments: Moment[], moment: Moment): Team {
-  let players = team.players
-  for (const event of moments.slice(0, moments.indexOf(moment) + 1)) {
+export function fixtureSnapshot(match: Match): FixtureSnapshot {
+  if (match.fixture) return match.fixture
+  const team = ({ id, name, shortName, color }: Team) => ({ id, name, shortName, color })
+  return {
+    id: match.id, revision: match.revision || 'legacy', competitionId: match.competitionId || (match.source.kind === 'demo' ? 'DEMO' : 'unknown'),
+    competition: match.competition, season: match.season, kickoff: match.kickoff, status: match.status,
+    round: match.round, score: match.score, shootout: match.shootout, period: match.period, clock: match.clock,
+    home: team(match.home), away: team(match.away), source: match.source, verification: match.verification,
+  }
+}
+
+export function orderedMoments(moments: Moment[]) {
+  return moments.map((moment, index) => ({ moment, index })).sort((a, b) =>
+    a.moment.minute - b.moment.minute || (a.moment.extra ?? 0) - (b.moment.extra ?? 0)
+    || (a.moment.order ?? a.index) - (b.moment.order ?? b.index)).map(({ moment }) => moment)
+}
+
+export function replayMoment(team: Team, moments: Moment[], moment: Moment) {
+  const order = orderedMoments(moments)
+  const through = order.findIndex(event => event.id === moment.id)
+  const dismissed: string[] = []
+  let players = [...team.players]
+  for (const event of order.slice(0, through + 1)) {
     if (event.teamId !== team.id) continue
     const incoming = event.playerIn
-    if (incoming && event.playerOut) players = players.map(player => player.id === event.playerOut ? incoming : player)
-    if (event.dismissal) players = players.filter(player => player.id !== event.dismissal)
+    if (incoming?.id && event.playerOut && !players.some(player => player.id === incoming.id) && !dismissed.includes(incoming.id)) {
+      players = players.map(player => player.id === event.playerOut ? incoming : player)
+    }
+    if (event.dismissal && players.some(player => player.id === event.dismissal)) {
+      dismissed.push(event.dismissal)
+      players = players.filter(player => player.id !== event.dismissal)
+    }
   }
-  return { ...team, players }
+  return { team: { ...team, players }, dismissed }
+}
+
+export function applyMoment(team: Team, moments: Moment[], moment: Moment): Team {
+  return replayMoment(team, moments, moment).team
 }
 
 export function displayDate(value: string, withTime = false) {

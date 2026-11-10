@@ -1,5 +1,36 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { setTimeout as delay } from 'node:timers/promises'
+
+async function addStill(page: Page, scene: string, width: number, height: number, colour: string, tool: string, mark: string) {
+  await page.getByRole('button', { name: new RegExp(scene) }).click()
+  const still = await page.evaluate(({ width, height, colour }) => {
+    const canvas = Object.assign(document.createElement('canvas'), { width, height })
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = colour
+    ctx.fillRect(0, 0, width, height)
+    ctx.strokeStyle = '#e9f2db'
+    ctx.lineWidth = 5
+    ctx.strokeRect(20, 20, width - 40, height - 40)
+    return canvas.toDataURL('image/png').split(',')[1]
+  }, { width, height, colour })
+  await page.getByLabel('Import match still file').setInputFiles({
+    name: `${width}x${height}.png`, mimeType: 'image/png', buffer: Buffer.from(still, 'base64'),
+  })
+  const drawing = page.locator('[aria-label="Media telestration canvas"]')
+  await expect(drawing).toBeVisible()
+  if (tool !== 'Spotlight') await page.getByRole('button', { name: 'Draw', exact: true }).click()
+  await page.getByRole('button', { name: tool, exact: true }).click()
+  const box = await drawing.boundingBox()
+  if (!box) throw new Error('Missing the telestration canvas.')
+  if (tool === 'Spotlight') await page.mouse.click(box.x + box.width * .52, box.y + box.height * .47)
+  else {
+    await page.mouse.move(box.x + box.width * .25, box.y + box.height * .33)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width * .74, box.y + box.height * .62, { steps: 7 })
+    await page.mouse.up()
+  }
+  await expect(drawing.locator(`[aria-label="${mark}"]`)).toHaveCount(1)
+}
 
 test('LAN rehearsal with a producer, two tablets and a clean TV output', async ({ page: producer, browser }, testInfo) => {
   const soak = process.env.STUDIO_REHEARSAL_SOAK === '1'
@@ -8,7 +39,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
   const portrait = await browser.newContext({ viewport: { width: 820, height: 1180 }, hasTouch: true })
   const television = await browser.newContext({ viewport: { width: 1920, height: 1080 } })
   try {
-    await producer.goto('/')
+    await producer.goto('/?mode=demo')
     await producer.getByRole('button', { name: 'Present', exact: true }).click()
     await producer.getByRole('button', { name: 'Start shared session' }).click()
     await producer.getByRole('button', { name: 'Connect devices' }).click()
@@ -57,7 +88,7 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
     await expect(tabletA.locator('.active-cue')).toContainText('Reveal the stepping line')
     await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
     await tabletB.getByRole('combobox', { name: 'Highlight player' }).selectOption('away-3')
-    await expect(tv.locator('[data-player-id="away-3"] [stroke="#defb50"]')).toHaveCount(1)
+    await expect(tv.locator('[data-player-id="away-3"] [data-player-highlight]')).toHaveCount(1)
     await expect(tv.locator('[data-handle]')).toHaveCount(0)
     await expect(tv.getByRole('button')).toHaveCount(0)
 
@@ -151,40 +182,33 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
 
     await producer.getByRole('button', { name: 'Editor', exact: true }).click()
     await beat(9)
+    await addStill(producer, 'Starting Shape', 1800, 1000, '#264e42', 'Defensive line', 'line')
+    await addStill(producer, 'The Press Trigger', 900, 1350, '#73432d', 'Spotlight', 'spotlight')
     await producer.getByRole('button', { name: /Starting Shape/ }).click()
-    const still = await producer.evaluate(() => {
-      const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 360 })
-      const ctx = canvas.getContext('2d')!
-      ctx.fillStyle = '#264e42'
-      ctx.fillRect(0, 0, 640, 360)
-      ctx.strokeStyle = '#e9f2db'
-      ctx.lineWidth = 3
-      ctx.strokeRect(20, 20, 600, 320)
-      ctx.strokeRect(20, 95, 100, 170)
-      return canvas.toDataURL('image/png').split(',')[1]
-    })
-    await producer.locator('input[aria-label="Import media"]').setInputFiles({
-      name: 'broadcast-still.png', mimeType: 'image/png', buffer: Buffer.from(still, 'base64'),
-    })
-    const drawing = producer.locator('[aria-label="Media telestration canvas"]')
-    await expect(drawing).toBeVisible()
-    await producer.getByRole('button', { name: 'Defensive line', exact: true }).click()
-    const box = await drawing.boundingBox()
-    if (!box) throw new Error('Missing the telestration canvas.')
-    await producer.mouse.move(box.x + box.width * .25, box.y + box.height * .33)
-    await producer.mouse.down()
-    await producer.mouse.move(box.x + box.width * .74, box.y + box.height * .62, { steps: 7 })
-    await producer.mouse.up()
-    await expect(drawing.locator('[aria-label="line"]')).toHaveCount(1)
     await producer.getByRole('button', { name: 'Stage preview' }).click()
     await expect(tabletB.getByRole('img', { name: 'Match analysis still' })).toBeVisible()
     await expect(graphic.getByRole('heading', { name: 'Player comparison' })).toBeVisible()
     await producer.getByRole('button', { name: 'Present', exact: true }).click()
     await producer.getByRole('button', { name: 'Take live' }).click()
-    await expect(tv.getByRole('img', { name: 'Match analysis still' })).toBeVisible()
+    const onAirImage = tv.getByRole('img', { name: 'Match analysis still' })
+    await expect(onAirImage).toBeVisible()
+    await expect.poll(() => onAirImage.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(1800)
     await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
     await expect(tv.locator('[data-player-id]')).toHaveCount(0)
-    await testInfo.attach('telestration-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-on-air.png') }), contentType: 'image/png' })
+    await testInfo.attach('telestration-landscape-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-landscape-on-air.png') }), contentType: 'image/png' })
+    await tabletA.getByRole('button', { name: 'Next scene' }).tap()
+    await expect(onAirTitle).toHaveText('The Press Trigger')
+    await expect.poll(() => onAirImage.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(900)
+    await expect(tv.locator('[aria-label="spotlight"]')).toHaveCount(1)
+    await testInfo.attach('telestration-portrait-on-air', { body: await tv.screenshot({ path: testInfo.outputPath('telestration-portrait-on-air.png') }), contentType: 'image/png' })
+    await tabletB.getByRole('button', { name: 'Previous scene' }).tap()
+    await expect(onAirTitle).toHaveText('Starting Shape')
+    await expect.poll(() => onAirImage.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(1800)
+    await television.setOffline(true)
+    await tv.reload({ waitUntil: 'domcontentloaded' })
+    await expect(onAirImage).toBeVisible()
+    await expect(tv.locator('[aria-label="line"]')).toHaveCount(1)
+    await television.setOffline(false)
     const format = producer.getByRole('combobox', { name: 'Output format' })
     await format.selectOption('9:16')
     await expect(tv.locator('main.on-air')).toHaveAttribute('data-output', '9:16')
@@ -205,6 +229,13 @@ test('LAN rehearsal with a producer, two tablets and a clean TV output', async (
       return context.getImageData(0, 0, 1, 1).data[3]
     }, overlay.toString('base64'))
     expect(cornerAlpha).toBe(0)
+    await format.selectOption('16:9')
+    await expect(tv.locator('main.on-air')).toHaveAttribute('data-output', '16:9')
+    await tabletA.getByRole('button', { name: 'Next scene' }).tap()
+    await expect(onAirTitle).toHaveText('The Press Trigger')
+    await tabletB.getByRole('button', { name: 'Next scene' }).tap()
+    await expect(onAirTitle).toHaveText('Break the Lines')
+    await expect(tv.locator('[data-player-id]')).toHaveCount(22)
 
     await beat(10)
     await producer.getByRole('button', { name: 'Clear output' }).click()

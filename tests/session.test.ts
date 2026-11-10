@@ -185,3 +185,68 @@ test('LAN server serves clean deep routes, rejects malformed commands and enforc
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+// A generated one-pixel JPEG (RGB 35, 101, 129), with no match imagery.
+const testJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAAQABAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8A+T6KKK/ZD+cz/9k=', 'base64')
+
+test('rundown frames are separate, scoped to air, and checked before changing the feed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'football-staged-frames-'))
+  const sessionDirectory = join(directory, 'sessions')
+  const app = await launch(sessionDirectory, directory)
+  try {
+    const opening = rundown(0, 0)
+    const { producer, a, b, screen } = await open(app.base, opening)
+    const frame = (credentials: SessionCredentials, key?: string, body?: Buffer) => fetch(
+      `${app.base}/api/session-asset?${new URLSearchParams(key ? { id: credentials.id, key } : { id: credentials.id })}`, {
+        method: body ? 'POST' : 'GET',
+        headers: { authorization: `Bearer ${credentials.token}`, ...(body ? { 'content-type': 'image/jpeg' } : {}) },
+        body: body ? new Uint8Array(body) : undefined,
+      },
+    )
+    assert.equal((await frame(a, undefined, testJpeg)).status, 403)
+    assert.equal((await frame(producer, undefined, Buffer.from('not a JPEG'))).status, 422)
+    const one = await frame(producer, undefined, testJpeg)
+    assert.equal(one.status, 201)
+    const first = { ...await one.json(), assetId: 'landscape', frame: 0 }
+    const secondJpeg = Buffer.concat([testJpeg.subarray(0, 2), Buffer.from([255, 254, 0, 3, 97]), testJpeg.subarray(2)])
+    const two = await frame(producer, undefined, secondJpeg)
+    assert.equal(two.status, 201)
+    const second = { ...await two.json(), assetId: 'portrait', frame: 0 }
+    assert.notEqual(first.key, second.key)
+    assert.equal(first.width, 1)
+    assert.equal((await frame(screen, first.key)).status, 404)
+    assert.equal((await frame({ ...producer, token: 'A'.repeat(43) }, first.key)).status, 401)
+
+    const project = { ...opening.project, scenes: opening.project.scenes.map((scene, index) => index < 2 ? {
+      ...scene, surface: 'media' as const, media: { type: 'image' as const, name: `frame ${index + 1}`, assetId: index === 0 ? first.assetId : second.assetId },
+    } : scene) }
+    const staged: Playout = { ...opening, project, mediaManifest: { [project.scenes[0].id]: first, [project.scenes[1].id]: second } }
+    const current = await read(mutate(app.base, producer, 0, { type: 'stage', content: staged }))
+    assert.equal(current.live, null)
+    assert.equal((await frame(screen, first.key)).status, 404)
+    assert.equal((await frame(a, first.key)).status, 200)
+    const advanced = await read(mutate(app.base, a, current.revision, { type: 'update', content: { ...staged, sceneId: project.scenes[1].id } }))
+    assert.equal(advanced.live, null)
+
+    const take = await fetch(`${app.base}/api/session?id=${producer.id}`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${producer.token}` },
+      body: JSON.stringify({ action: { type: 'take' }, expectedRevision: current.revision, expectedStageRevision: current.stageRevision }),
+    })
+    assert.equal(take.status, 200)
+    const live = await take.json() as StudioState
+    assert.equal(live.live?.sceneId, project.scenes[1].id)
+    assert.deepEqual(Buffer.from(await (await frame(screen, first.key)).arrayBuffer()), testJpeg)
+    assert.deepEqual(Buffer.from(await (await frame(screen, second.key)).arrayBuffer()), secondJpeg)
+
+    await rm(join(sessionDirectory, 'media', producer.id, `${first.key}.jpg`))
+    const broken = await mutate(app.base, b, live.revision, { type: 'update', content: staged })
+    assert.equal(broken.status, 422)
+    assert.match((await broken.json()).error, /staged frame.*missing/i)
+    assert.equal((await read(get(app.base, screen))).live?.sceneId, project.scenes[1].id)
+    assert.equal((await mutate(app.base, producer, live.revision, { type: 'take' })).status, 422)
+    assert.equal((await read(get(app.base, screen))).live?.sceneId, project.scenes[1].id)
+  } finally {
+    await app.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})

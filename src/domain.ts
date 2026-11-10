@@ -1,3 +1,6 @@
+import { isFixtureSnapshot, type FixtureSnapshot } from './data/fixtureSnapshot.js';
+import { isSceneRoster, type SceneRoster } from './roster.js';
+
 export const PITCH = { length: 105, width: 68 } as const;
 
 export type Point = { x: number; y: number };
@@ -35,7 +38,8 @@ export type Phase = (typeof phases)[number];
 export type Player = Point & {
   id: string;
   name: string;
-  number: number;
+  number?: number;
+  sourceId?: string;
   side: Side;
   position: string;
   role: string;
@@ -108,6 +112,7 @@ export type MatchIdentity = {
   competition: string;
   score: string;
   source: string;
+  fixture?: FixtureSnapshot;
 };
 
 export type SourceReference = { label: string; url?: string; retrievedAt?: string; estimated?: boolean };
@@ -134,15 +139,17 @@ export type Scene = {
   swapped?: boolean;
   cameraKeys?: { time: number; view: PitchView; orientation: Orientation }[];
   substitutions?: { outgoing: Player; incomingId: string; time: number }[];
-  media?: { assetId: string; type: 'image' | 'video'; name: string; frame?: number; alignment?: MediaAlignment; alignmentFrame?: number };
+  media?: { assetId: string; type: 'image' | 'video'; name: string; width?: number; height?: number; frame?: number; alignment?: MediaAlignment; alignmentFrame?: number };
   sourceReference?: SourceReference;
+  roster?: SceneRoster;
+  surface?: 'pitch' | 'media';
 };
 
 export type Project = { version: 1; id: string; name: string; match: MatchIdentity; scenes: Scene[] };
 
 export const teamColors = { home: '#f26472', away: '#70a8fc' };
 export const sideInk = { home: '#2c1019', away: '#10213d' };
-export const inkColors = ['#defb50', '#ffffff', '#fca75e', '#f26472', '#70a8fc', '#65ebc2'];
+export const inkColors = ['#f6cb59', '#ffffff', '#fca75e', '#f26472', '#70a8fc', '#65ebc2'];
 export const viewNames: Record<PitchView, string> = {
   full: 'Full pitch', half: 'Attacking half', third: 'Final third', box: 'Penalty area',
   wide: 'Wide tactical', broadcast: 'Broadcast angle', elevated: 'Tactical elevated',
@@ -152,7 +159,7 @@ export const uid = () => globalThis.crypto?.randomUUID?.() ?? `id-${Date.now().t
 export const clamp = (n: number, low: number, high: number) => Math.min(high, Math.max(low, n));
 export const onPitch = (point: Point) => ({ x: clamp(point.x, 0, PITCH.length), y: clamp(point.y, 0, PITCH.width) });
 
-type RosterEntry = { id?: string; name: string; number: number; position?: string };
+type RosterEntry = { id?: string; name: string; number?: number | null; position?: string; role?: string };
 const homeRoster: RosterEntry[] = [
   { number: 1, name: 'Eli Mercer' }, { number: 3, name: 'Cameron Dale' }, { number: 4, name: 'Isaac Ford' },
   { number: 5, name: 'Kieran Holt' }, { number: 2, name: 'Jude Marsh' }, { number: 8, name: 'Evan Foster' },
@@ -190,7 +197,7 @@ function pitchSlots(side: Side, formation: FormationName) {
 
 function generalPosition(value: string) {
   const position = value.toUpperCase().replace(/[\s-]/g, '');
-  if (/GK|GOALKEEPER/.test(position)) return 'GK';
+  if (/^(GK|G|GOALKEEPER|KEEPER)$/.test(position)) return 'GK';
   if (/BACK|DEFEN|^[LR]?[CW]?B$/.test(position)) return 'DEF';
   if (/MIDFIELD|^[LR]?[ACD]?M$/.test(position)) return 'MID';
   if (/FORWARD|ATTACK|WING|^[LR]?[WS]T?$/.test(position)) return 'ATT';
@@ -199,25 +206,31 @@ function generalPosition(value: string) {
 
 export function makeLineup(side: Side, formation: FormationName, roster?: RosterEntry[]): Player[] {
   const available = [...(roster ?? (side === 'home' ? homeRoster : awayRoster))];
-  return pitchSlots(side, formation).map((slot, index) => {
-    const exact = available.findIndex((entry) => entry.position?.toUpperCase() === slot.position);
-    const byLine = available.findIndex((entry) => entry.position && generalPosition(entry.position) === generalPosition(slot.position));
+  return pitchSlots(side, formation).flatMap((slot, index) => {
+    const exact = available.findIndex((entry) => (entry.role ?? entry.position)?.toUpperCase() === slot.position);
+    const byLine = available.findIndex((entry) => {
+      const assigned = entry.role ?? entry.position;
+      return assigned && generalPosition(assigned) === generalPosition(slot.position);
+    });
     const unassigned = available.findIndex((entry) => !entry.position);
-    const choice = [exact, byLine, unassigned, 0].find((candidate) => candidate >= 0) ?? 0;
-    const entry = available.splice(choice, 1)[0] ?? { name: `Player ${index + 1}`, number: index + 1 };
-    return { ...slot, id: `${side}-${entry.id ?? index}`, name: entry.name, number: entry.number, side, role: slot.position };
+    const choice = [exact, byLine, unassigned, slot.position === 'GK' && roster && roster.length < 11 ? -1 : 0].find((candidate) => candidate >= 0);
+    const entry = choice === undefined ? undefined : available.splice(choice, 1)[0];
+    if (!entry) return [];
+    return [{ ...slot, id: `${side}-${entry.id ?? index}`, name: entry.name, number: entry.number ?? undefined,
+      ...(entry.id ? { sourceId: entry.id } : {}), position: entry.position ?? slot.position, side, role: slot.position }];
   });
 }
 
 export function applyFormation(scene: Scene, side: Side, formation: FormationName): Scene {
   const current = scene.players.filter((player) => player.side === side);
   const available = [...current];
-  const updated = pitchSlots(side, formation).map((slot, index) => {
+  const updated = pitchSlots(side, formation).flatMap((slot) => {
     const exact = available.findIndex((player) => player.position === slot.position);
     const byLine = available.findIndex((player) => generalPosition(player.position) === generalPosition(slot.position));
-    const previous = available.splice(Math.max(exact >= 0 ? exact : byLine, 0), 1)[0];
-    const player = previous ?? makeLineup(side, formation)[index];
-    return { ...player, ...slot, x: scene.swapped ? 105 - slot.x : slot.x, y: scene.swapped ? 68 - slot.y : slot.y, role: slot.position };
+    const choice = exact >= 0 ? exact : byLine >= 0 ? byLine : slot.position === 'GK' && scene.roster && current.length < 11 ? -1 : 0;
+    const player = choice < 0 ? undefined : available.splice(choice, 1)[0];
+    if (!player) return [];
+    return [{ ...player, x: scene.swapped ? 105 - slot.x : slot.x, y: scene.swapped ? 68 - slot.y : slot.y, role: slot.position }];
   });
   const players = side === 'home' ? [...updated, ...scene.players.filter((player) => player.side === 'away')] : [...scene.players.filter((player) => player.side === 'home'), ...updated];
   return {
@@ -272,7 +285,7 @@ export function swapSides(scene: Scene): Scene {
     swapped: !scene.swapped,
     players: scene.players.map((player) => ({ ...player, ...mirror(player) })),
     ball: { ...scene.ball, ...mirror(scene.ball) },
-    objects: scene.objects.map((object) => ({ ...object, points: object.points.map(mirror), curve: object.curve && mirror(object.curve) })),
+    objects: scene.objects.map((object) => !objectOnSurface(object, scene, false) ? object : ({ ...object, points: object.points.map(mirror), curve: object.curve && mirror(object.curve) })),
     paths: scene.paths.map((path) => ({ ...path, from: mirror(path.from), to: mirror(path.to), control: path.control && mirror(path.control) })),
   };
 }
@@ -617,6 +630,8 @@ function validScene(scene: unknown) {
     && ['stadium', 'training', 'mono'].includes(scene.theme as string)
     && ['cut', 'fade'].includes(scene.transition as string)
     && optional(scene.swapped, bool)
+    && optional(scene.roster, isSceneRoster)
+    && (scene.surface === undefined || scene.surface === 'pitch' || scene.surface === 'media')
     && optional(scene.cameraKeys, (value) => arrayOf(value, (key) => record(key) && finite(key.time) && viewKey(key.view) && ['horizontal', 'vertical'].includes(key.orientation as string)))
     && optional(scene.substitutions, (value) => arrayOf(value, (entry) => record(entry) && finite(entry.time) && str(entry.incomingId)
       && strings(entry.outgoing, ['id', 'name', 'position', 'role']) && point(entry.outgoing)))
@@ -625,7 +640,7 @@ function validScene(scene: unknown) {
     && viewKey(scene.view)
     && record(scene.ball) && point(scene.ball) && optional(scene.ball.ownerId, str)
     && arrayOf(scene.players, (item) => record(item) && point(item) && strings(item, ['id', 'name', 'position', 'role'])
-      && ['home', 'away'].includes(item.side as string) && finite(item.number) && optional(item.color, str) && optional(item.highlight, bool))
+      && ['home', 'away'].includes(item.side as string) && optional(item.number, finite) && optional(item.sourceId, str) && optional(item.color, str) && optional(item.highlight, bool))
     && arrayOf(scene.objects, (item) => record(item) && strings(item, ['id', 'kind', 'color'])
       && objectKinds.has(item.kind as ObjectKind) && arrayOf(item.points, point) && item.points.length > 0 && optional(item.curve, point)
       && finite(item.opacity) && finite(item.thickness) && optional(item.label, str) && optional(item.dashed, bool)
@@ -644,6 +659,7 @@ function validScene(scene: unknown) {
       && optional(item.highlight, (value) => arrayOf(value, str)) && optional(item.view, viewKey))
     && optional(scene.media, (media) => record(media) && strings(media, ['assetId', 'name'])
       && ['image', 'video'].includes(media.type as string) && optional(media.frame, finite)
+      && optional(media.width, (value) => finite(value) && value > 0) && optional(media.height, (value) => finite(value) && value > 0)
       && optional(media.alignmentFrame, (value) => finite(value) && value >= 0)
       && optional(media.alignment, (alignment) => arrayOf(alignment, point) && Boolean(tryMediaCalibration(alignment as Point[]))))
     && optional(scene.sourceReference, (source) => record(source) && str(source.label) && optional(source.url, str)
@@ -655,6 +671,7 @@ export function validateProject(input: unknown): Project {
     throw new Error('This file is not a version 1 studio project.');
   }
   if (!strings(input.match, ['home', 'away', 'homeShort', 'awayShort', 'competition', 'score', 'source'])
+    || !record(input.match) || !optional(input.match.fixture, isFixtureSnapshot)
     || !arrayOf(input.scenes, validScene) || input.scenes.length === 0) {
     throw new Error('The project contains incomplete match or scene data.');
   }

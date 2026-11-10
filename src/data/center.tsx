@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, BarChart3, CalendarDays, ChevronRight, CircleDot, ClipboardList, Clock, Crosshair, Goal, ListOrdered, MapPin, Radio, Search, Shield, Swords, Table2, Users } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowUpRight, BarChart3, CalendarDays, ChevronRight, ClipboardList, Clock, Crosshair, Goal, ListOrdered, MapPin, Radio, Search, Shield, Swords, Table2, Users } from 'lucide-react'
 import { ComparisonDesk } from './comparison'
 import { competitions, demoMatches, demoStandings } from './fixtures'
 import { lineupGraphic, matchGraphic, TeamMark } from './graphics'
-import { applyMoment, displayDate, scoreText } from './model'
-import type { GraphicSpec, LineupPlayer, LoadTacticsPayload, Match, Moment, Source, Standing, Team } from './model'
+import { displayDate, fixtureSnapshot, replayMoment, scoreText } from './model'
+import { activeSeason, coverageFor, fixturesFor, readFootballSnapshot, resultStandings, subscribeToFootballPack } from './footballDataset'
+import { FootballPackImport } from './FootballPackImport'
+import type { GraphicSpec, LineupKind, LoadTacticsPayload, Match, Moment, Source, Standing, Team } from './model'
 import { PredictionDesk } from './predictions'
 import { footballProvider } from './provider'
 import './data.css'
@@ -12,10 +14,8 @@ import './data.css'
 type DeskTab = 'matches' | 'standings' | 'compare' | 'predictions'
 type DetailTab = 'summary' | 'lineups' | 'stats' | 'squads'
 type FixtureFilter = 'all' | 'scheduled' | 'finished'
-const statusLabels = { scheduled: 'Upcoming', finished: 'Full time', live: 'Live', postponed: 'Postponed' }
-const current = new Date()
-const currentYear = current.getUTCMonth() >= 6 ? current.getUTCFullYear() : current.getUTCFullYear() - 1
-const seasons = Array.from({ length: 5 }, (_, index) => currentYear - index)
+const statusLabels = { scheduled: 'Upcoming', finished: 'Full time', live: 'Live', postponed: 'Postponed', awaiting: 'Awaiting verification' }
+const seasons = Array.from({ length: 5 }, (_, index) => Number(activeSeason.id) - index)
 const listLimit = 14
 const numberFormat = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 2 })
 const tabs = [
@@ -37,20 +37,30 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
   producer?: boolean; initialMatchId?: string
 }) {
   const [tab, setTab] = useState<DeskTab>('matches')
-  const [competition, setCompetition] = useState('demo')
-  const [season, setSeason] = useState(String(currentYear))
+  const [competition, setCompetition] = useState(() => new URLSearchParams(window.location.search).get('mode') === 'demo' || initialMatchId?.startsWith('demo-')
+    ? 'demo' : initialMatchId?.startsWith('cl:') ? 'CL' : initialMatchId?.startsWith('el:') ? 'EL' : 'PL')
+  const [season, setSeason] = useState(activeSeason.id)
+  const [snapshot, setSnapshot] = useState(readFootballSnapshot)
+  const [licensed, setLicensed] = useState(false)
   const [filter, setFilter] = useState<FixtureFilter>('all')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState(false)
-  const [activeId, setActiveId] = useState(initialMatchId ?? demoMatches[0].id)
+  const [activeId, setActiveId] = useState(initialMatchId ?? '')
   const [matchFeed, setMatchFeed] = useState<{ matches: Match[]; source?: Source; message?: string; loading?: boolean }>({ matches: [] })
   const [tableFeed, setTableFeed] = useState<{ standings: Standing[]; message?: string; loading?: boolean }>({ standings: [] })
   const demo = competition === 'demo'
-  const matches = demo ? demoMatches : matchFeed.matches
-  const active = matches.find(match => match.id === activeId) || matches[0]
-  const shouldFetchTable = !demo && (tab === 'standings' || (tab === 'matches' && active?.status === 'scheduled'))
+  const pinned = useMemo(() => fixturesFor(competition, season, snapshot.pack), [competition, season, snapshot])
+  const matches = demo ? demoMatches : pinned.length && !licensed ? pinned : matchFeed.matches.length ? matchFeed.matches : pinned
+  const active = matches.find(match => match.id === activeId) || (demo ? matches[0] : matches.filter(match => match.status === 'finished' && match.verification?.status === 'verified').at(-1))
+    || matches.filter(match => match.status === 'finished').at(-1) || matches.find(match => match.status === 'scheduled') || matches[0]
+  const source = matches[0]?.source
+  const useProvider = !demo && (licensed || !pinned.length)
+  const standings = demo ? demoStandings : useProvider && tableFeed.standings.length ? tableFeed.standings : resultStandings(matches)
+  const coverage = demo ? undefined : coverageFor(matches, competition)
+  const shouldFetchTable = useProvider && (tab === 'standings' || (tab === 'matches' && active?.status === 'scheduled'))
+  useEffect(() => subscribeToFootballPack(() => setSnapshot(readFootballSnapshot())), [])
   useEffect(() => {
-    if (demo) return
+    if (!useProvider) return
     const controller = new AbortController()
     footballProvider.matches(competition, season, controller.signal).then(feed => {
       const matches = feed.matches || []
@@ -59,7 +69,7 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
       if (closest) setActiveId(closest.id)
     }).catch(() => {})
     return () => controller.abort()
-  }, [competition, season, demo])
+  }, [competition, season, useProvider])
   useEffect(() => {
     if (!shouldFetchTable) return
     const controller = new AbortController()
@@ -73,7 +83,7 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
     setSeason(nextSeason)
     setMatchFeed({ matches: [], loading: nextCompetition !== 'demo' })
     setTableFeed({ standings: [], loading: nextCompetition !== 'demo' })
-    setActiveId(demoMatches[0].id)
+    setActiveId('')
     setExpanded(false)
     setSearch('')
     setFilter('all')
@@ -88,11 +98,12 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
     <header className="desk-heading">
       <div><span className="desk-eyebrow"><Radio size={14} /> ANALYSIS / DATA DESK</span><h1>Match intelligence</h1></div>
       <div className="desk-heading-controls">
-        {demo ? <span className="desk-source-tag">Fictional demo</span> : matchFeed.source && <SourceTag source={matchFeed.source} />}
+        {demo ? <span className="desk-source-tag">Fictional demo</span> : source && <SourceTag source={source} />}
         <label className="desk-field"><span className="desk-sr-only">Competition</span><select value={competition} onChange={event => changeFeed(event.target.value, season)}>
-          <option value="demo">Premier Division · Demo</option>{competitions.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+          {competitions.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}<option value="demo">Premier Division · Rehearsal</option>
         </select></label>
         {!demo && <label className="desk-field"><span className="desk-sr-only">Season</span><select value={season} onChange={event => changeFeed(competition, event.target.value)}>{seasons.map(year => <option value={year} key={year}>{year}/{String(year + 1).slice(-2)}</option>)}</select></label>}
+        {!demo && <label className="desk-toggle"><input type="checkbox" checked={licensed} onChange={event => { setLicensed(event.target.checked); changeFeed(competition, season) }} /> Licensed provider</label>}
       </div>
     </header>
     <nav className="desk-tabs" aria-label="Match intelligence sections">
@@ -101,7 +112,16 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
         setTab(item.id)
       }}><item.icon size={16} />{item.text}</button>)}
     </nav>
-    {!demo && matchFeed.message && <div className="desk-service-message" role="status">{matchFeed.message}</div>}
+    {useProvider && matchFeed.message && <div className="desk-service-message" role="status">{matchFeed.message}</div>}
+    {coverage && <div className="football-coverage" aria-label="Data coverage">
+      <span className="desk-indicator">Coverage preview</span>
+      <span>{coverage.fixtures}{coverage.expected ? '/' + coverage.expected : ''} fixtures · {coverage.finished} results · {coverage.missingResults} awaiting verification</span>
+      <span>Results complete through round {coverage.throughRound || '—'}{coverage.latestScore && ' · latest available result ' + displayDate(coverage.latestScore)}</span>
+      <span>{coverage.squadTeams}/{coverage.teams} clubs with usable sourced squads · {coverage.confirmed} fixtures with both confirmed XIs</span>
+      <span>{snapshot.pack?.metrics.filter(metric => metric.competitionId === competition).length || 0} supplied statistics rows{coverage.finished > 0 ? ' · team totals from available results' : ''}</span>
+      {source?.downloadedAt && <span>Snapshot retrieved {displayDate(source.downloadedAt, true)}</span>}
+      {coverage.conflicts > 0 && <span>{coverage.conflicts} records need producer review</span>}
+    </div>}
     {tab === 'matches' && <div className="data-match-layout">
       <aside className="desk-panel data-fixture-list">
         <div className="desk-panel-head"><div><span className="desk-eyebrow">FIXTURE INDEX</span><h2>Matches</h2></div><span className="desk-indicator">{matches.length}</span></div>
@@ -123,14 +143,15 @@ export function DataCenter({ onLoadTactics, onQueueGraphic, producer = false, in
           {sorted.length > listLimit && <button className="desk-secondary data-more" type="button" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer matches' : `Show all ${sorted.length} matches`}</button>}
         </div>
       </aside>
-      {active ? <MatchCenter key={active.id} match={active} matches={matches} standings={demo ? demoStandings : tableFeed.standings} onLoadTactics={onLoadTactics} onQueueGraphic={onQueueGraphic} />
+      {active ? <MatchCenter key={active.id + ':' + snapshot.pack?.revision} match={active} matches={matches} standings={standings} onLoadTactics={onLoadTactics} onQueueGraphic={onQueueGraphic} />
         : <section className="desk-panel"><div className="desk-empty comparison-empty">{matchFeed.loading ? 'Loading match data…' : 'Select a competition with available match data.'}</div></section>}
     </div>}
-    {tab === 'standings' && <LeagueTable standings={demo ? demoStandings : tableFeed.standings} loading={!demo && tableFeed.loading} message={!demo ? tableFeed.message : undefined} />}
-    {tab === 'compare' && <ComparisonDesk onQueueGraphic={onQueueGraphic} />}
+    {tab === 'standings' && <LeagueTable standings={standings} loading={useProvider && tableFeed.loading} message={useProvider ? tableFeed.message : demo ? undefined : 'Provisional table from available results. Played totals show gaps in the snapshot.'} />}
+    {tab === 'compare' && <ComparisonDesk key={competition + ':' + snapshot.pack?.revision} onQueueGraphic={onQueueGraphic} matches={matches} competition={competition} demo={demo} />}
     {tab === 'predictions' && (matches.length
       ? <PredictionDesk key={`${competition}-${season}`} matches={matches} onQueueGraphic={onQueueGraphic} producer={producer} />
       : <section className="desk-panel"><p className="desk-empty">{matchFeed.loading ? 'Loading fixtures…' : 'No fixtures are available for predictions in this competition.'}</p></section>)}
+    {!demo && <FootballPackImport />}
   </div>
 }
 
@@ -156,51 +177,56 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
   const [detailStatus, setDetailStatus] = useState('')
   const [tab, setTab] = useState<DetailTab>('summary')
   const [status, setStatus] = useState('')
-  const [manual, setManual] = useState(false)
+  const [proposal, setProposal] = useState(false)
   const [squad, setSquad] = useState<{ home?: Team; away?: Team; message?: string }>({})
   const [analysisNote, setAnalysisNote] = useState(() => readNote(match.id))
   useEffect(() => {
     if (match.source.kind !== 'provider') return
     const controller = new AbortController()
-    footballProvider.match(match.id, controller.signal).then(feed => {
+    footballProvider.match(match.providerId ?? match.id, controller.signal).then(feed => {
       setDetail(feed.match || null)
       setDetailStatus(feed.error || (feed.stale ? 'Showing the last available match details.' : ''))
     }).catch(() => {})
     return () => controller.abort()
-  }, [match.id, match.source.kind])
+  }, [match.id, match.providerId, match.source.kind])
   const active = detail || match
   useEffect(() => {
-    if (tab !== 'squads' || active.source.kind !== 'provider' || !/^\d+$/.test(active.home.id) || !/^\d+$/.test(active.away.id)) return
+    if (tab !== 'squads' || active.source.kind !== 'provider' || !active.home.providerId || !active.away.providerId) return
     const controller = new AbortController()
-    Promise.all([footballProvider.squad(active.home.id, controller.signal), footballProvider.squad(active.away.id, controller.signal)]).then(([home, away]) => {
+    Promise.all([footballProvider.squad(active.home.providerId, controller.signal), footballProvider.squad(active.away.providerId, controller.signal)]).then(([home, away]) => {
       setSquad({ home: home.team, away: away.team, message: home.error || away.error || home.message || away.message })
     }).catch(() => {})
     return () => controller.abort()
-  }, [active.away.id, active.home.id, active.source.kind, tab])
-  const hasHome = active.home.players.length >= 11
-  const hasAway = active.away.players.length >= 11
-  const hasLineups = hasHome && hasAway
-  const load = (moment?: Moment, teams?: [Team, Team]) => {
-    const [home, away] = teams || [
-      hasHome ? active.home : { ...active.home, formation: active.home.formation || '4-3-3', players: [] },
-      hasAway ? active.away : { ...active.away, formation: active.away.formation || '4-2-3-1', players: [] },
-    ]
-    const lineupSource = teams ? 'manual line-up' : hasLineups ? 'line-ups supplied' : hasHome || hasAway ? 'one line-up supplied' : 'blank formations'
+  }, [active.away.providerId, active.home.providerId, active.source.kind, tab])
+  const demo = active.source.kind === 'demo'
+  const hasXi = (team: Team) => team.players.length === 11 && new Set(team.players.map(player => player.id)).size === 11
+  const hasLineups = hasXi(active.home) && hasXi(active.away)
+  const lineupKind: LineupKind = demo ? 'demo' : !hasLineups ? 'repair'
+    : [active.home, active.away].some(team => team.lineupKind === 'squad') ? 'squad' : 'confirmed'
+  const load = (moment?: Moment, accepted = false) => {
+    if (lineupKind === 'squad' && !accepted) { setProposal(true); return }
+    const teams = [active.home, active.away].map((team, index) => {
+      const proposed = squad[index ? 'away' : 'home']?.players ?? []
+      const eligible = [...new Map([...(team.squad ?? proposed), ...(team.bench ?? []), ...team.players].filter(player => player.id).map(player => [player.id, player])).values()]
+      return { ...team, lineupKind: demo ? 'demo' as const : team.lineupKind ?? (hasXi(team) ? 'confirmed' as const : 'repair' as const), eligible }
+    })
+    const [home, away] = teams.map(team => moment ? replayMoment(team, active.moments, moment) : { team, dismissed: [] })
     onLoadTactics({
-      matchId: active.id, title: `${home.name} v ${away.name}`, competition: active.competition, score: active.score,
-      home: moment ? applyMoment(home, active.moments, moment) : home,
-      away: moment ? applyMoment(away, active.moments, moment) : away,
-      classification: moment && active.source.kind !== 'demo' ? 'RECONSTRUCTED' : 'HYPOTHETICAL',
-      source: `${active.source.label} · ${lineupSource} · positions estimated`, moment,
+      matchId: active.id, title: active.home.name + ' v ' + active.away.name, competition: active.competition, score: active.score,
+      home: home.team, away: away.team, homeDismissed: home.dismissed, awayDismissed: away.dismissed, lineupKind,
+      fixture: demo ? undefined : fixtureSnapshot(active), classification: demo && !moment ? 'HYPOTHETICAL' : 'RECONSTRUCTED',
+      source: active.source.label + ' · ' + (lineupKind === 'repair' ? 'Roster repair' : lineupKind === 'squad' ? 'Sourced squad XI · analyst selection' : demo ? 'Rehearsal XI' : 'Confirmed XI') + ' · positions estimated',
+      moment,
     })
   }
   const queue = (graphic: GraphicSpec) => {
     onQueueGraphic(graphic)
     setStatus('Graphic added to studio preview')
   }
-  const label = hasLineups
-    ? active.source.kind === 'demo' ? active.status === 'scheduled' ? 'Load expected demo XI' : 'Load into tactics' : 'Load confirmed XI'
-    : hasHome || hasAway ? 'Load available XI' : 'Load blank formation'
+  const label = lineupKind === 'repair' ? 'Open roster repair' : lineupKind === 'squad' ? 'Review sourced squad XIs' : demo
+    ? active.status === 'scheduled' ? 'Load expected demo XI' : 'Load into tactics' : 'Load confirmed XIs'
+  const conflict = active.verification?.status === 'conflict'
+  const unverifiedResult = !demo && active.status === 'finished' && active.verification?.status !== 'verified'
   return <section className="data-match-centre" aria-label="Match details">
     <div className="data-match-hero">
       <div className="data-hero-top"><div><span><i /> {active.competition.toUpperCase()}</span><small>{active.season}{active.round ? ` / MATCHWEEK ${active.round}` : ''}</small></div><span className={active.status === 'live' ? 'desk-indicator live' : 'desk-indicator'}>{statusLabels[active.status]}</span></div>
@@ -212,11 +238,16 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
       <div className="data-hero-bottom"><span><Clock size={14} /> {displayDate(active.kickoff, true)}</span>{active.venue && <span><MapPin size={14} /> {active.venue}</span>}<SourceTag source={active.source} /></div>
     </div>
     <div className="data-match-actions"><button className="desk-primary" type="button" onClick={() => load()}><Crosshair size={17} /> {label}</button>
-      {!hasLineups && <button type="button" className="desk-secondary" aria-expanded={manual} onClick={() => setManual(!manual)}>Manual line-up</button>}
-      <button className="desk-secondary" type="button" onClick={() => queue(matchGraphic(active))}>Queue match graphic <ArrowUpRight size={15} /></button>
+      <button className="desk-secondary" type="button" disabled={conflict || unverifiedResult} onClick={() => queue(matchGraphic(active))}>Queue match graphic <ArrowUpRight size={15} /></button>
       <span role="status">{status || detailStatus}</span>
     </div>
-    {manual && <ManualLineup match={active} onLoad={teams => load(undefined, teams)} />}
+    {unverifiedResult && <p className="desk-service-message">Reported result. An independently verified record is needed to queue a full-time graphic.</p>}
+    {active.verification?.note && <p className="desk-service-message">{active.verification.note}</p>}
+    {lineupKind === 'repair' && <p className="desk-service-message">Eligible XI gap · {Math.max(0, 11 - active.home.players.length)} {active.home.shortName} · {Math.max(0, 11 - active.away.players.length)} {active.away.shortName}. Import authorised records to complete the selection.</p>}
+    {proposal && <section className="desk-panel" aria-label="Proposed sourced squad line-ups">
+      <div className="data-two-columns"><LineupList team={active.home} label="Proposed sourced squad XI" /><LineupList team={active.away} label="Proposed sourced squad XI" /></div>
+      <button type="button" className="desk-primary" onClick={() => load(undefined, true)}>Use sourced squad XIs</button>
+    </section>}
     <div className="desk-panel data-match-detail">
       <nav className="desk-tabs compact" aria-label="Match detail sections">
         <button type="button" aria-pressed={tab === 'summary'} onClick={() => setTab('summary')}><ClipboardList size={15} /> Overview</button>
@@ -242,7 +273,7 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
         </div>
       </>}
       {tab === 'lineups' && <div className="data-two-columns">
-        {(['home', 'away'] as const).map(side => <LineupList key={side} team={active[side]} label={active.source.kind === 'demo' ? active.status === 'scheduled' ? 'Expected XI · fictional' : 'Demonstration XI' : 'Starting XI'} onQueue={active[side].players.length === 11 ? () => queue(lineupGraphic(active, side)) : undefined} />)}
+        {(['home', 'away'] as const).map(side => <LineupList key={side} team={active[side]} label={active.source.kind === 'demo' ? active.status === 'scheduled' ? 'Expected XI · fictional' : 'Demonstration XI' : active[side].lineupKind === 'squad' ? 'Sourced squad XI · analyst selection' : 'Confirmed XI'} onQueue={active[side].players.length === 11 ? () => queue(lineupGraphic(active, side)) : undefined} />)}
       </div>}
       {tab === 'stats' && (active.stats.length ? <div className="data-match-stat-list">
         <div className="desk-panel-head"><div><span className="desk-eyebrow">MATCH TOTALS</span><h2>Team statistics</h2></div><button type="button" className="desk-secondary" onClick={() => queue({
@@ -255,10 +286,12 @@ function MatchCenter({ match, matches, standings, onLoadTactics, onQueueGraphic 
       {tab === 'squads' && <>
         {squad.message && <div className="desk-service-message">{squad.message}</div>}
         <div className="data-two-columns">
-          {(['home', 'away'] as const).map(side => <LineupList key={side} team={active.source.kind === 'demo' ? { ...active[side], players: [...active[side].players, ...(active[side].bench || [])], bench: [] } : squad[side] || { ...active[side], players: [], bench: [] }} label="Squad" />)}
+          {(['home', 'away'] as const).map(side => <LineupList key={side} team={active.source.kind === 'demo' ? { ...active[side], players: [...active[side].players, ...(active[side].bench || [])], bench: [] } : squad[side] || { ...active[side], players: active[side].squad ?? [], bench: [] }} label="Squad" />)}
         </div>
       </>}
-      <div className="data-match-provenance"><SourceTag source={active.source} />{active.source.updatedAt && <span>Source updated {displayDate(active.source.updatedAt, true)}</span>}{active.source.kind === 'provider' && <span>Provider coverage and delay vary by competition.</span>}</div>
+      <div className="data-match-provenance"><SourceTag source={active.source} />{active.source.updatedAt && <span>Source effective {displayDate(active.source.updatedAt, true)}</span>}
+        {active.verification?.status === 'verified' && <span>Independently checked {active.verification.checkedAt && displayDate(active.verification.checkedAt)}</span>}
+        {active.verification?.sources?.map(url => <a key={url} href={url} target="_blank" rel="noreferrer">{new URL(url).hostname.replace('www.', '')}</a>)}{active.source.kind === 'provider' && <span>Provider coverage and delay vary by competition.</span>}</div>
     </div>
   </section>
 }
@@ -290,28 +323,5 @@ function MatchPreview({ match, matches, standings }: { match: Match; matches: Ma
     })}</div>
     <p>{headToHead.length ? `Most recent meeting in this feed: ${headToHead[0].home.name} ${scoreText(headToHead[0].score)} ${headToHead[0].away.name}.` : 'Head-to-head is unavailable in this season feed.'}</p>
     <p>Squad availability reports are unavailable.</p>
-  </div>
-}
-function ManualLineup({ match, onLoad }: { match: Match; onLoad: (teams: [Team, Team]) => void }) {
-  const [home, setHome] = useState('')
-  const [away, setAway] = useState('')
-  const parse = (text: string): LineupPlayer[] => text.split('\n').map(line => line.trim()).filter(Boolean).map((line, index) => {
-    const [number, name, position] = line.split(',').map(value => value.trim())
-    return { number: /^\d{1,2}$/.test(number) ? Number(number) : index + 1, name: name || number, position: position || '' }
-  })
-  const homePlayers = parse(home)
-  const awayPlayers = parse(away)
-  return <div className="desk-panel data-manual-lineup">
-    <div className="desk-panel-head"><div><span className="desk-eyebrow"><CircleDot size={14} /> ANALYST ENTRY</span><h2>Manual line-up</h2></div><span className="desk-indicator">Unverified</span></div>
-    <div className="desk-stack"><p>Enter one player per line as shirt number, name, position.</p>
-      <div className="desk-field-row">
-        <label className="desk-field">{match.home.name} <textarea rows={5} placeholder="1, Player name, GK" value={home} onChange={event => setHome(event.target.value)} /></label>
-        <label className="desk-field">{match.away.name} <textarea rows={5} placeholder="1, Player name, GK" value={away} onChange={event => setAway(event.target.value)} /></label>
-      </div>
-      <div className="desk-action-row"><span>{homePlayers.length} home · {awayPlayers.length} away</span><button type="button" className="desk-primary" disabled={homePlayers.length !== 11 || awayPlayers.length !== 11} onClick={() => onLoad([
-        { ...match.home, formation: match.home.formation || '4-3-3', players: homePlayers },
-        { ...match.away, formation: match.away.formation || '4-2-3-1', players: awayPlayers },
-      ])}>Load manual XI <ArrowDownRight size={16} /></button></div>
-    </div>
   </div>
 }

@@ -16,6 +16,7 @@ export interface SessionLock {
 export interface SessionState<T> {
   id: string
   revision: number
+  stageRevision?: number
   role: SessionRole
   preview: T
   live: T | null

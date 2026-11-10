@@ -1,33 +1,38 @@
 import { useEffect, useState } from 'react'
 import { Activity, ArrowUpRight, BarChart3, Captions, ChartNoAxesColumnIncreasing, CircleDot, ClipboardList, GalleryHorizontalEnd, LayoutTemplate, ListOrdered, Play, Save, ScanLine, Swords, Target, Trophy, Users } from 'lucide-react'
 import type { GraphicKind, GraphicSpec, Match, Team } from './model'
-import { displayDate, scoreText } from './model'
+import { displayDate, fixtureSnapshot, scoreText } from './model'
+import type { FixtureSnapshot } from './fixtureSnapshot'
+import { fixturesFor } from './footballSnapshot'
+import { FixtureResultCard } from '../Scorebug'
 import { demoMatches, demoStandings, officialPlayers } from './fixtures'
 import './data.css'
 
 export function TeamMark({ team, large = false }: { team: Pick<Team, 'shortName' | 'color'>; large?: boolean }) {
   return <span className={large ? 'data-team-mark is-large' : 'data-team-mark'} style={{ '--team-color': team.color } as React.CSSProperties} aria-hidden="true"><span>{team.shortName}</span></span>
 }
-export function matchGraphic(match: Match, kind?: GraphicKind): GraphicSpec {
-  const status = match.status
-  const title = status === 'finished' ? 'Full-time result' : status === 'live' ? 'Match score' : status === 'postponed' ? 'Fixture status' : 'Match preview'
-  const detail = status === 'finished' ? 'Full time' : status === 'live' ? 'In play' : status === 'postponed' ? 'Postponed' : displayDate(match.kickoff, true)
+export function graphicFromFixture(fixture: FixtureSnapshot, kind: GraphicKind = fixture.score ? 'result' : 'preview'): GraphicSpec {
+  const status = fixture.status
+  const title = status === 'finished' ? fixture.verification?.status === 'reported' ? 'Reported result' : 'Full-time result' : status === 'live' ? 'Match score' : status === 'postponed' ? 'Fixture status' : status === 'awaiting' ? 'Awaiting verification' : 'Match preview'
+  const detail = status === 'finished' ? 'Full time' : status === 'live' ? 'In play' : status === 'postponed' ? 'Postponed' : status === 'awaiting' ? 'Awaiting verification' : displayDate(fixture.kickoff, true)
   return {
-    id: `graphic-${match.id}-${kind || match.status}`,
-    kind: kind || (match.score ? 'result' : 'preview'),
-    title,
-    subtitle: `${match.competition} · ${match.season}${match.venue ? ` · ${match.venue}` : ''}`,
-    source: match.source.label,
-    teams: [match.home, match.away].map(({ name, shortName, color, formation }) => ({ name, shortName, color, formation })),
-    score: match.score, detail,
+    id: `graphic-${fixture.id}-${kind}`, kind, title,
+    subtitle: `${fixture.competition} · ${fixture.season}${fixture.round ? ` · Matchweek ${fixture.round}` : ''}`,
+    source: fixture.source.label,
+    teams: [fixture.home, fixture.away],
+    score: fixture.score, detail, fixture,
   }
+}
+export function matchGraphic(match: Match, kind?: GraphicKind): GraphicSpec {
+  const result = graphicFromFixture(fixtureSnapshot(match), kind)
+  return { ...result, teams: [match.home, match.away].map(({ name, shortName, color, formation }) => ({ name, shortName, color, formation })) }
 }
 export function lineupGraphic(match: Match, side: 'home' | 'away'): GraphicSpec {
   const team = match[side]
   return {
     id: `graphic-${match.id}-${side}-xi`, kind: 'lineup',
     title: team.name, subtitle: `${match.status === 'scheduled' && match.source.kind === 'demo' ? 'Expected XI' : 'Starting XI'} · ${team.formation || 'Formation unavailable'} · ${match.competition}`,
-    source: match.source.label, teams: [team], lineup: team.players,
+    source: team.lineupSource?.label ?? match.source.label, teams: [team], lineup: team.players, fixture: fixtureSnapshot(match),
   }
 }
 const templates = [
@@ -71,13 +76,16 @@ export function exampleGraphic(kind: GraphicKind): GraphicSpec {
 }
 
 export function BroadcastGraphic({ graphic }: { graphic: GraphicSpec }) {
+  if (graphic.fixture && (graphic.kind === 'result' || graphic.kind === 'preview')) {
+    return <FixtureResultCard fixture={graphic.fixture} title={graphic.title} />
+  }
   const comparison = !!graphic.subjects?.length
   const fixture = ['title', 'result', 'preview', 'formation', 'prediction'].includes(graphic.kind) && !!graphic.teams?.length
   const largeValue = !!graphic.value
   return <div className="data-graphic" data-testid="broadcast-graphic">
     <div className={`data-graphic-stage graphic-${graphic.kind}`}>
       <header className="data-graphic-header">
-        <div><i /> TOUCHLINE STUDIO</div><span>{templates.find(template => template.kind === graphic.kind)?.label || 'Studio graphic'}</span>
+        <div><i /> BANG ON SPORTS HUB</div><span>{templates.find(template => template.kind === graphic.kind)?.label || 'Studio graphic'}</span>
       </header>
       <div className="data-graphic-content">
         <div className="data-graphic-kicker">{graphic.subtitle}</div>
@@ -116,11 +124,40 @@ function readDrafts(): SavedGraphics {
     return stored && typeof stored === 'object' ? stored : {}
   } catch { return {} }
 }
-export function GraphicsLibrary({ onQueueGraphic }: { onQueueGraphic: (graphic: GraphicSpec) => void }) {
+const cachedFixtures = () => ['PL', 'CL', 'EL'].flatMap(competition => {
+  const list = fixturesFor(competition)
+  const final = list.filter(match => match.status === 'finished').sort((a, b) => Date.parse(b.kickoff) - Date.parse(a.kickoff)).slice(0, 12)
+  const soon = list.filter(match => match.status === 'scheduled').sort((a, b) => Date.parse(a.kickoff) - Date.parse(b.kickoff)).slice(0, 8)
+  return [...final, ...soon].map(fixtureSnapshot)
+})
+const fixtureKinds = new Set<GraphicKind>(['result', 'preview', 'title', 'formation'])
+const dataKinds = new Set<GraphicKind>(['lineup', 'players', 'teams', 'spotlight', 'events', 'performance', 'substitution', 'leaderboard', 'prediction'])
+function genericDraft(kind: GraphicKind): GraphicSpec {
+  return { id: `editorial-${kind}`, kind, title: templates.find(item => item.kind === kind)?.label ?? 'Editorial graphic',
+    subtitle: 'Bang On Sports Hub', source: 'Editorial', detail: '', ...(kind === 'stat' ? { label: '', value: '' } : {}) }
+}
+
+export function GraphicsLibrary({ onQueueGraphic, fixture, rehearsal = false }: { onQueueGraphic: (graphic: GraphicSpec) => void; fixture?: FixtureSnapshot; rehearsal?: boolean }) {
+  const [choices] = useState(cachedFixtures)
+  const [picked, setPicked] = useState(() => fixture ?? choices[0])
   const [kind, setKind] = useState<GraphicKind>('result')
   const [saved, setSaved] = useState(readDrafts)
-  const [draft, setDraft] = useState(() => saved.result || exampleGraphic('result'))
+  function makeDraft(next: GraphicKind, selected = picked) {
+    if (rehearsal) return saved[next] || exampleGraphic(next)
+    if (selected && fixtureKinds.has(next)) {
+      const base = graphicFromFixture(selected, next)
+      const previous = saved[next]
+      return { ...base, title: previous?.fixture?.id === selected.id ? previous.title : base.title }
+    }
+    const prior = saved[next]
+    return prior && prior.source === 'Editorial' ? prior : genericDraft(next)
+  }
+  const [draft, setDraft] = useState(() => makeDraft('result'))
   const [status, setStatus] = useState('')
+  const needsSource = !rehearsal && (dataKinds.has(kind) || (fixtureKinds.has(kind) && !draft.fixture))
+  const fixtureConflict = draft.fixture?.verification?.status === 'conflict'
+  const available = [...new Map([...(fixture ? [fixture] : []), ...(picked ? [picked] : []), ...choices].map(item => [item.id, item])).values()]
+  const latest = available.find(item => item.id === draft.fixture?.id)
   useEffect(() => {
     if (!status) return
     const timeout = window.setTimeout(() => setStatus(''), 3000)
@@ -128,7 +165,7 @@ export function GraphicsLibrary({ onQueueGraphic }: { onQueueGraphic: (graphic: 
   }, [status])
   const choose = (next: GraphicKind) => {
     setKind(next)
-    setDraft(saved[next] || exampleGraphic(next))
+    setDraft(makeDraft(next))
     setStatus('')
   }
   const save = () => {
@@ -157,19 +194,27 @@ export function GraphicsLibrary({ onQueueGraphic }: { onQueueGraphic: (graphic: 
           <div className="graphic-inspector">
             <span className="desk-eyebrow">GRAPHIC DETAILS</span>
             <div className="graphic-edit-grid">
+              {!rehearsal && fixtureKinds.has(kind) && <label>Fixture <select value={picked?.id ?? ''} onChange={event => {
+                const selected = available.find(item => item.id === event.target.value)
+                if (selected) { setPicked(selected); setDraft(makeDraft(kind, selected)) }
+              }}><option value="" disabled>Choose a fixture</option>{available.map(item => <option key={item.id} value={item.id}>
+                {item.home.name} v {item.away.name} · {displayDate(item.kickoff)}
+              </option>)}</select></label>}
               <label>Title <input maxLength={80} value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></label>
               <label>Subtitle <input maxLength={100} value={draft.subtitle} onChange={event => setDraft({ ...draft, subtitle: event.target.value })} /></label>
-              <label>Source <input maxLength={100} value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
+              <label>Source <input readOnly={!!draft.fixture && !rehearsal} maxLength={100} value={draft.source} onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
               {draft.label !== undefined && <label>Label <input maxLength={60} value={draft.label} onChange={event => setDraft({ ...draft, label: event.target.value })} /></label>}
               {draft.value !== undefined && <label>Display value <input maxLength={12} value={draft.value} onChange={event => setDraft({ ...draft, value: event.target.value })} /></label>}
               {draft.detail !== undefined && <label>Detail <input maxLength={100} value={draft.detail} onChange={event => setDraft({ ...draft, detail: event.target.value })} /></label>}
-              {draft.score && <label className="graphic-edit-score">Score <span>
-                <input aria-label="Home score" type="number" min="0" max="99" value={draft.score[0]} onChange={event => setDraft({ ...draft, score: [Math.max(0, Math.min(99, Number(event.target.value))), draft.score![1]] })} />
-                <input aria-label="Away score" type="number" min="0" max="99" value={draft.score[1]} onChange={event => setDraft({ ...draft, score: [draft.score![0], Math.max(0, Math.min(99, Number(event.target.value)))] })} />
+              {draft.score && (!draft.fixture || rehearsal) && <label className="graphic-edit-score">Score <span>
+                <input aria-label="Home score" type="number" min="0" max="99" value={draft.score[0]} onChange={event => setDraft({ ...draft, fixture: undefined, score: [Math.max(0, Math.min(99, Number(event.target.value))), draft.score![1]] })} />
+                <input aria-label="Away score" type="number" min="0" max="99" value={draft.score[1]} onChange={event => setDraft({ ...draft, fixture: undefined, score: [draft.score![0], Math.max(0, Math.min(99, Number(event.target.value)))] })} />
               </span></label>}
             </div>
-            <div className="desk-action-row"><span role="status">{status || templates.find(template => template.kind === kind)?.desc}</span>
-              <button className="desk-primary" type="button" disabled={!draft.title.trim()} onClick={() => {
+            {draft.fixture && !rehearsal && <p className="desk-muted">Pinned fixture revision {draft.fixture.revision}</p>}
+            {latest && latest.revision !== draft.fixture?.revision && <button className="desk-secondary" type="button" onClick={() => setDraft({ ...graphicFromFixture(latest, kind), title: draft.title })}>Update to current fixture data</button>}
+            <div className="desk-action-row"><span role="status">{status || (fixtureConflict ? 'Resolve conflicting fixture records first.' : needsSource ? 'Prepare this graphic from sourced records in Match Data.' : templates.find(template => template.kind === kind)?.desc)}</span>
+              <button className="desk-primary" type="button" disabled={needsSource || fixtureConflict || !draft.title.trim()} onClick={() => {
                 onQueueGraphic({ ...draft, id: `graphic-${globalThis.crypto?.randomUUID?.() || Date.now()}` })
                 setStatus('Added to studio preview')
               }}>Queue to preview <ArrowUpRight size={16} /></button>

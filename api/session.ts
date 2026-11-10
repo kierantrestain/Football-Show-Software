@@ -1,6 +1,7 @@
 import { blobSessionStore } from '../server/blob-session-store.js'
+import { blobAssetStore } from '../server/blob-session-asset-store.js'
 import { sessionService } from '../server/session-service.js'
-import { validStudioSnapshot } from '../server/studio-snapshot.js'
+import { studioRosterError, validStudioSnapshot } from '../server/studio-snapshot.js'
 
 export default {
   fetch(request: Request) {
@@ -12,6 +13,7 @@ export default {
         headers: { 'cache-control': 'no-store' },
       })
     }
-    return sessionService(blobSessionStore(useOidc ? oidcToken : undefined), { validateContent: validStudioSnapshot })(request)
+    const token = useOidc ? oidcToken : undefined
+    return sessionService(blobSessionStore(token), { validateContent: validStudioSnapshot, contentError: studioRosterError, assetStore: blobAssetStore(token) })(request)
   },
 }

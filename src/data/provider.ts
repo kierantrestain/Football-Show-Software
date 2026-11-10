@@ -21,7 +21,7 @@ async function read(params: Record<string, string>, signal?: AbortSignal): Promi
   try {
     const response = await fetch(`/api/football?${new URLSearchParams(params)}`, { signal })
     if (!response.headers.get('Content-Type')?.includes('application/json')) {
-      return { configured: false, message: 'The live provider is unavailable in this environment. Use the demo or official archive.' }
+      return { configured: false, message: 'The provider is unavailable. The dated snapshot remains available.' }
     }
     return await response.json() as DeskPayload
   } catch (error) {

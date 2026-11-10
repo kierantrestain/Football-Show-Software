@@ -30,11 +30,13 @@ describe('match intelligence', () => {
 })
 
 describe('football-data.org adapter', () => {
-  it('leaves demo use available without a provider token', async () => {
+  it('serves the dated Premier League snapshot without a provider token', async () => {
     vi.stubEnv('FOOTBALL_DATA_TOKEN', '')
     const response = await handleFootball(new Request('http://studio.local/api/football'))
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ configured: false })
+    const payload = await response.json()
+    expect(payload).toMatchObject({ configured: false, snapshot: { season: { label: '2026/27' } } })
+    expect(payload.matches).toHaveLength(380)
   })
 
   it('caches provider records and preserves unavailable fields without invented values', async () => {
@@ -60,7 +62,7 @@ describe('football-data.org adapter', () => {
     expect(JSON.stringify(result)).not.toContain('server-only-example')
     expect(result.match).toMatchObject({
       score: [2, 0],
-      home: { players: [{ name: 'Goalkeeper', position: 'GK', number: 0 }] },
+      home: { players: [{ name: 'Goalkeeper', position: 'GK' }] },
       away: { players: [] },
       stats: [{ label: 'Shots', home: 8, away: null }],
       moments: [{ title: 'Goal · Example scorer', minute: 62 }],

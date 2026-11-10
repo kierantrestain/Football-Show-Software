@@ -52,21 +52,32 @@ const mediaTypes: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
   mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
 }
-export async function storeMedia(file: File) {
+async function matchesImageFormat(file: Blob, type: string) {
+  const data = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+  if (type === 'image/png') return [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => data[index] === byte)
+  if (type === 'image/jpeg') return data[0] === 255 && data[1] === 216 && data[2] === 255
+  return String.fromCharCode(...data.slice(0, 4)) === 'RIFF' && String.fromCharCode(...data.slice(8, 12)) === 'WEBP'
+}
+
+export async function storeMedia(file: File): Promise<NonNullable<Scene['media']>> {
   const type = file.type || mediaTypes[file.name.split('.').at(-1)?.toLowerCase() ?? '']
   if (!type || !supportedType.test(type)) throw new Error('Choose PNG, JPG, WebP, MP4, WebM or compatible MOV.')
   if (file.size > 250 * 1024 * 1024) throw new Error('The local asset limit is 250 MB.')
   const kind = type.startsWith('image/') ? 'image' : 'video'
+  if (kind === 'image' && !await matchesImageFormat(file, type.toLowerCase())) throw new Error('The image contents do not match its JPG, PNG or WebP format.')
   const blob = file.type === type ? file : file.slice(0, file.size, type)
   const url = URL.createObjectURL(blob)
+  let dimensions: { width: number; height: number }
   try {
-    await new Promise<void>((resolve, reject) => {
+    dimensions = await new Promise<{ width: number; height: number }>((resolve, reject) => {
       const media = kind === 'image' ? new Image() : document.createElement('video')
       const timeout = setTimeout(() => reject(new Error('The browser could not read this media file.')), 10_000)
       const finish = (error?: Error) => {
         clearTimeout(timeout)
+        const [width, height] = media instanceof HTMLVideoElement ? [media.videoWidth, media.videoHeight] : [media.naturalWidth, media.naturalHeight]
         if (error) reject(error)
-        else resolve()
+        else if (!width || !height) reject(new Error('The source has no readable dimensions.'))
+        else resolve({ width, height })
       }
       media.onerror = () => finish(new Error('This browser cannot decode that file. Try H.264 MP4 or WebM for video.'))
       if (media instanceof HTMLVideoElement) {
@@ -78,11 +89,14 @@ export async function storeMedia(file: File) {
   } finally { URL.revokeObjectURL(url) }
   const id = uid()
   await storage.saveAsset({ id, blob, name: file.name })
-  return { assetId: id, type: kind as 'image' | 'video', name: file.name, frame: 0 }
+  return { assetId: id, type: kind, name: file.name, frame: 0, ...dimensions }
 }
 
 export async function exportProject(project: Project) {
-  const ids = new Set(project.scenes.flatMap(scene => scene.media ? [scene.media.assetId] : []))
+  const ids = new Set(project.scenes.flatMap(scene => [
+    ...(scene.media ? [scene.media.assetId] : []),
+    ...scene.objects.flatMap(object => object.mediaAssetId ? [object.mediaAssetId] : []),
+  ]))
   const assets = await Promise.all([...ids].map(async id => {
     const asset = await storage.asset(id)
     return asset && { id, name: asset.name, data: await toDataUrl(asset.blob) }
@@ -110,9 +124,13 @@ export async function importProject(file: File): Promise<Project> {
     assetIds.set(asset.id, id)
     assets.push({ id, name: asset.name, blob: await (await fetch(asset.data)).blob() })
   }
-  const scenes = project.scenes.map(scene => scene.media && assetIds.has(scene.media.assetId)
-    ? { ...scene, media: { ...scene.media, assetId: assetIds.get(scene.media.assetId)! } }
-    : scene)
+  const scenes = project.scenes.map(scene => ({
+    ...scene,
+    media: scene.media && { ...scene.media, assetId: assetIds.get(scene.media.assetId) ?? scene.media.assetId },
+    objects: scene.objects.map(object => object.mediaAssetId && assetIds.has(object.mediaAssetId)
+      ? { ...object, mediaAssetId: assetIds.get(object.mediaAssetId) }
+      : object),
+  }))
   await Promise.all(assets.map(storage.saveAsset))
   return { ...project, id: uid(), scenes }
 }

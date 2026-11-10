@@ -9,7 +9,7 @@ async function markerCenter(page: Page, id: string) {
 }
 
 test('edit formations, drag a player, and create, undo and recover a scene', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?mode=demo')
   await expect(page.getByRole('heading', { name: 'Starting Shape' })).toBeVisible()
   await expect(page.locator('[data-player-id]')).toHaveCount(22)
   const original = await markerCenter(page, 'home-6')
@@ -39,7 +39,7 @@ test('edit formations, drag a player, and create, undo and recover a scene', asy
 })
 
 test('still telestration, annotated PNG, project export and offline recovery', async ({ page }, testInfo) => {
-  await page.goto('/')
+  await page.goto('/?mode=demo')
   const still = await page.evaluate(() => {
     const canvas = document.createElement('canvas')
     canvas.width = 640
@@ -53,6 +53,7 @@ test('still telestration, annotated PNG, project export and offline recovery', a
   await expect(page.getByRole('img', { name: 'rehearsal.png' })).toBeVisible()
   const drawing = page.locator('[aria-label="Media telestration canvas"]')
   await expect(drawing).toBeVisible()
+  await page.getByRole('button', { name: 'Draw', exact: true }).click()
   await page.getByRole('button', { name: 'Defensive line', exact: true }).click()
   const box = await drawing.boundingBox()
   if (!box) throw new Error('Missing media canvas.')
@@ -89,7 +90,7 @@ test('still telestration, annotated PNG, project export and offline recovery', a
 })
 
 test('browser screenshots cover editing, studio home and local television', async ({ page }, testInfo) => {
-  await page.goto('/')
+  await page.goto('/?mode=demo')
   for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     await page.setViewportSize({ width, height })
     await expect(page.locator('[data-player-id]')).toHaveCount(22)
@@ -97,7 +98,7 @@ test('browser screenshots cover editing, studio home and local television', asyn
     await page.screenshot({ path: testInfo.outputPath(`editor-${width}.png`), animations: 'disabled' })
   }
   await page.getByRole('button', { name: 'Studio', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Studio desk.' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Matchday desk' })).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('studio-home.png'), animations: 'disabled' })
   await page.goto('/output/local')
   await page.setViewportSize({ width: 1920, height: 1080 })
@@ -107,7 +108,7 @@ test('browser screenshots cover editing, studio home and local television', asyn
 })
 
 test('import, seek, freeze and annotate browser-compatible video', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?mode=demo')
   const clip = await page.evaluate(async () => {
     const canvas = document.createElement('canvas')
     canvas.width = 480; canvas.height = 270
@@ -136,6 +137,7 @@ test('import, seek, freeze and annotate browser-compatible video', async ({ page
   await page.getByRole('button', { name: 'Pause footage' }).click()
   await page.getByRole('button', { name: 'Forward one frame (30 fps)' }).click()
   await page.getByRole('button', { name: 'Save frame' }).click()
+  await page.getByRole('button', { name: 'Draw', exact: true }).click()
   await page.getByRole('button', { name: 'Arrow', exact: true }).click()
   const pitch = page.getByLabel('Media telestration canvas')
   const box = await pitch.boundingBox()
@@ -148,7 +150,7 @@ test('import, seek, freeze and annotate browser-compatible video', async ({ page
 })
 
 test('encode a real WebM animation and a transparent 4K PNG', async ({ page }) => {
-  await page.goto('/')
+  await page.goto('/?mode=demo')
   await page.getByRole('button', { name: /Break the Lines/ }).click()
   await page.getByRole('button', { name: 'Scene settings' }).click()
   const dialog = page.getByRole('dialog', { name: 'Scene settings' })

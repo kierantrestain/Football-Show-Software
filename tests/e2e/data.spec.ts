@@ -16,7 +16,7 @@ async function screenshot(page: Page, testInfo: TestInfo, name: string) {
 }
 
 test('opens the fictional match, checks the full XIs and reconstructs a key moment', async ({ page }, testInfo) => {
-  await page.goto('/data')
+  await page.goto('/data?mode=demo')
   await expect(page.getByRole('heading', { name: 'Match intelligence' })).toBeVisible()
   await expect(page.locator('.data-hero-score')).toContainText('2 – 1')
   await expect(page.getByRole('button', { name: 'Reconstruct Owen Reeves opens the scoring' })).toBeVisible()
@@ -34,7 +34,7 @@ test('opens the fictional match, checks the full XIs and reconstructs a key mome
 })
 
 test('compares three real players, queues clean TV graphics and compares five teams', async ({ page, context }, testInfo) => {
-  await page.goto('/data')
+  await page.goto('/data?mode=demo')
   await page.getByRole('button', { name: 'Comparisons', exact: true }).click()
   await expect(page.getByRole('columnheader', { name: 'Cole Palmer' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Kevin De Bruyne' })).toBeVisible()
@@ -59,7 +59,7 @@ test('compares three real players, queues clean TV graphics and compares five te
 })
 
 test('saves panel predictions, settles a fictional result, closes submissions and persists totals', async ({ page }, testInfo) => {
-  await page.goto('/data')
+  await page.goto('/data?mode=demo')
   await page.getByRole('button', { name: 'Predictions', exact: true }).click()
   await page.getByLabel('Home score').fill('2')
   await page.getByLabel('Away score').fill('0')
@@ -82,13 +82,14 @@ test('saves panel predictions, settles a fictional result, closes submissions an
   await expect(page.getByRole('button', { name: 'Connect devices' })).toBeVisible()
   await page.getByRole('button', { name: 'Editor', exact: true }).click()
   await page.getByRole('button', { name: 'Match data', exact: true }).click()
+  await page.getByLabel('Competition', { exact: true }).selectOption('demo')
   await page.getByRole('button', { name: 'Predictions', exact: true }).click()
   await page.getByRole('checkbox', { name: 'Producer cutoff override' }).check()
   await expect(page.getByRole('button', { name: 'Save prediction' })).toBeEnabled()
 })
 
 test('previews and edits a match graphic before queuing it', async ({ page }, testInfo) => {
-  await page.goto('/graphics')
+  await page.goto('/graphics?mode=demo')
   await expect(page.getByRole('heading', { name: 'Graphics library' })).toBeVisible()
   await expect(page.getByTestId('broadcast-graphic')).toContainText('2 – 1')
   await screenshot(page, testInfo, 'graphics')

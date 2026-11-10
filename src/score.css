@@ -1,0 +1,70 @@
+.fixture-scorebug {
+  --score-size: clamp(12px, 1.62cqw, 64px);
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(4.2ch, auto);
+  align-items: stretch;
+  background: #151917;
+  color: #f8f1e4;
+  border: 1px solid #5c6155;
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: var(--score-size);
+  max-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.fixture-scorebug-air { justify-self: start; min-width: min(100%, 23em); margin-bottom: .45em; }
+.fixture-scorebug-editor { --score-size: 17px; width: min(100%, 530px); }
+.fixture-club {
+  min-width: 0; display: flex; align-items: center; justify-content: center; padding: .44em .58em;
+  background: #262b26; box-shadow: inset 0 -3px var(--club-color); text-align: center;
+}
+.fixture-club-name { font-family: var(--font); font-size: .61em; line-height: 1.18; font-weight: 720; overflow-wrap: anywhere; }
+.fixture-club-code { display: none; }
+.fixture-score-core {
+  min-width: 4.2ch; display: grid; place-content: center; gap: .09em; padding: .22em .45em;
+  background: #111513; font-weight: 800; text-align: center; line-height: 1.08;
+}
+.fixture-score-core strong { white-space: nowrap; font-size: 1em; }
+.fixture-score-core small { color: #e4d7b0; font-size: .45em; white-space: nowrap; }
+.fixture-status {
+  display: grid; place-content: center; padding: .28em .5em; border-left: 1px solid #484e43;
+  background: #343b31; font: 700 .51em/1.05 var(--mono); text-align: center; min-width: 3.8em;
+}
+.fixture-status[data-live] { background: #b33232; color: #fff3ed; }
+.fixture-result-shell {
+  width: 100%; height: 100%; aspect-ratio: 16 / 9; background: #151a16; container-type: inline-size;
+  color: #f7f1e4; overflow: hidden; box-sizing: border-box;
+}
+.fixture-result-card {
+  display: grid; height: 100%; min-height: 0; grid-template-rows: auto minmax(0, .85fr) minmax(0, 1.35fr) auto;
+  padding: 3cqw 5cqw; gap: 1.65cqw; background: radial-gradient(ellipse at 50% 70%, #27372a 0%, #1e2820 53%, #141a15 100%);
+}
+.fixture-result-card > header, .fixture-result-card > footer {
+  display: flex; justify-content: space-between; align-items: center; gap: 2cqw;
+  font: 650 clamp(7px, 1.02cqw, 48px)/1.2 var(--mono); letter-spacing: .075em; text-transform: uppercase;
+}
+.fixture-result-card header span:first-child { display: flex; gap: .65cqw; align-items: center; }
+.fixture-result-card header i { width: .64cqw; height: .64cqw; background: var(--accent); }
+.fixture-result-card footer { color: #d2d7c9; letter-spacing: .03em; border-top: 1px solid #63715e; padding-top: .8cqw; }
+.result-card-title { align-self: center; display: grid; gap: .35cqw; }
+.result-card-title small { color: var(--accent); font: 650 clamp(8px, 1.19cqw, 58px)/1.2 var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+.result-card-title h2 { font: 700 clamp(16px, 4.6cqw, 200px)/.97 var(--condensed); margin: 0; overflow-wrap: anywhere; }
+.result-card-match {
+  display: grid; grid-template-columns: minmax(0,1fr) minmax(11ch, .73fr) minmax(0,1fr); grid-template-areas: "home score away";
+  align-self: center; align-items: stretch; gap: 1.2cqw; font-size: clamp(9px, 1.9cqw, 80px);
+}
+.result-card-club {
+  min-width: 0; display: grid; align-content: center; justify-items: center; gap: .45cqw;
+  min-height: 11cqw; padding: 1cqw; background: #29332a; border-bottom: .28cqw solid var(--club-color); text-align: center;
+}
+.result-card-club strong { font: 700 1em/1.1 var(--font); overflow-wrap: anywhere; }
+.result-card-club > span { color: #f7f1e4; padding: .4em .55em; background: #131914; border-left: .2em solid var(--club-color); font: 650 .53em/1 var(--mono); }
+.result-card-club.club-0 { grid-area: home; }
+.result-card-club.club-1 { grid-area: away; }
+.result-card-score { grid-area: score; display: grid; align-content: center; justify-items: center; padding: .25cqw; font-variant-numeric: tabular-nums; }
+.result-card-score > strong { white-space: nowrap; font: 800 clamp(16px, 5cqw, 220px)/1 var(--font); letter-spacing: -.06em; }
+.result-card-score > span { color: #e4dbc4; margin-top: .6cqw; font: 640 clamp(7px, 1cqw, 44px)/1.15 var(--mono); text-align: center; }
+@media (max-width: 750px) {
+  .fixture-scorebug-editor .fixture-club-code { display: inline; font-size: .63em; }
+  .fixture-scorebug-editor .fixture-club-name { display: none; }
+}

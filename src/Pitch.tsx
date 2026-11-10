@@ -19,6 +19,7 @@ type PitchProps = {
   onPointerMove?: (event: PointerEvent<SVGSVGElement>) => void;
   onPointerUp?: (event: PointerEvent<SVGSVGElement>) => void;
   onPointerCancel?: (event: PointerEvent<SVGSVGElement>) => void;
+  onLostPointerCapture?: (event: PointerEvent<SVGSVGElement>) => void;
   onPlayerSelect?: (id: string) => void;
 };
 
@@ -83,7 +84,7 @@ export function pitchCoordinates(event: PointerEvent<SVGSVGElement>, scene: Pick
 }
 
 const pitchThemes = {
-  stadium: { apron: '#071f1b', field: '#123d31', stripe: '#184536', line: '#a3c1ab', corner: '#648f77' },
+  stadium: { apron: '#101f19', field: '#254638', stripe: '#2b4c3e', line: '#c3d2bf', corner: '#91aa95' },
   training: { apron: '#143521', field: '#2d5c38', stripe: '#356541', line: '#d2e8c5', corner: '#779f75' },
   mono: { apron: '#202629', field: '#384145', stripe: '#414b50', line: '#c9d6d9', corner: '#707b80' },
 } as const;
@@ -153,8 +154,8 @@ function Arrowhead({ before, end, color, thickness }: { before: Point; end: Poin
     strokeWidth={thickness} strokeLinecap="round" strokeLinejoin="round" />;
 }
 
-function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1, measurements = true }: {
-  object: TacticalObject; project: ProjectPoint; clean: boolean; selected: boolean; opacity: number; scale?: number; measurements?: boolean;
+function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1, measurements = true, mediaAspect }: {
+  object: TacticalObject; project: ProjectPoint; clean: boolean; selected: boolean; opacity: number; scale?: number; measurements?: boolean; mediaAspect?: number;
 }) {
   const { id, kind, color, dashed, curve, points } = object;
   const [a, b = a, c] = points;
@@ -179,7 +180,10 @@ function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1,
   }
 
   if (kind === 'circle' || kind === 'spotlight') {
-    geometry = path(arc(a, Math.max(distance, 2), 0, Math.PI * 2, 38), project, true);
+    const imageStretch = mediaAspect ? mediaAspect * 68 / 105 : 1;
+    const radius = Math.max(Math.hypot(b.x - a.x, (b.y - a.y) / imageStretch), 2);
+    const circle = arc(a, radius, 0, Math.PI * 2, 38).map(({ x, y }) => ({ x, y: a.y + (y - a.y) * imageStretch }));
+    geometry = path(circle, project, true);
     if (kind === 'spotlight') {
       fill = color;
       fillOpacity = .13;
@@ -224,12 +228,61 @@ function TacticalGraphic({ object, project, clean, selected, opacity, scale = 1,
   </g>;
 }
 
+type MarkerLabel = Point & { text: string; width: number };
+type LabelBounds = { left: number; right: number; top: number; bottom: number };
+const markAccent = '#f6cb59';
+
+function surname(name: string) {
+  const parts = name.trim().split(/\s+/);
+  const last = parts.pop() ?? '';
+  const leading = [];
+  while (parts.length && leading.length < 2 && /^(al|da|de|del|di|dos|la|le|van|von|der|den)$/i.test(parts.at(-1)!)) leading.unshift(parts.pop()!);
+  return [...leading, last].join(' ');
+}
+
+function markerLabels(scene: Scene, project: ProjectPoint, viewBox: number[], selected?: ReadonlySet<string>) {
+  const candidates = scene.players.filter(player => player.highlight || selected?.has(player.id) || scene.marker === 'name');
+  if (!candidates.length) return new Map<string, MarkerLabel>();
+  const [left, top, width, height] = viewBox;
+  const markers = scene.players.map(project);
+  const occupied: LabelBounds[] = markers.map(({ x, y }) => ({ left: x - 2.05, right: x + 2.05, top: y - 2.05, bottom: y + 2.05 }));
+  const labels = new Map<string, MarkerLabel>();
+  const priority = (player: Player) => (selected?.has(player.id) ? 2 : 0) + (player.highlight ? 1 : 0);
+  for (const player of candidates.sort((a, b) => priority(b) - priority(a))) {
+    const name = surname(player.name);
+    const text = name.length > 21 ? name.slice(0, 20) + '…' : name;
+    const labelWidth = Math.max(5.2, text.length * 1.04 + 1.65);
+    const half = labelWidth / 2;
+    const { x, y } = project(player);
+    const placements = [{ x, y: y + 4 }, { x, y: y - 4 }, { x: x + half + 2.6, y }, { x: x - half - 2.6, y }];
+    for (const at of placements) {
+      const box = { left: at.x - half, right: at.x + half, top: at.y - 1.38, bottom: at.y + 1.38 };
+      if (box.left < left + .75 || box.right > left + width - .75 || box.top < top + .75 || box.bottom > top + height - .75) continue;
+      if (occupied.some(other => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top)) continue;
+      labels.set(player.id, { ...at, text, width: labelWidth });
+      occupied.push(box);
+      break;
+    }
+  }
+  return labels;
+}
+
+function markerInk(color: string, side: Player['side']) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color)?.[1];
+  if (!hex) return sideInk[side];
+  const channels = [0, 2, 4].map(start => {
+    const value = parseInt(hex.slice(start, start + 2), 16) / 255;
+    return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+  });
+  const luminance = .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+  return luminance > .175 ? '#101312' : '#fffaf1';
+}
+
 function PlayerMarker({ player, project, scene, selected, clean, onSelect, time }: {
   player: Player; project: ProjectPoint; scene: Scene; selected: boolean; clean: boolean; onSelect?: (id: string) => void; time: number;
 }) {
   const at = project(player);
   const color = player.color || teamColors[player.side];
-  const name = player.name.split(' ').slice(-1)[0];
   const scale = trackValue(scene.tracks, player.id, 'scale', time, 1);
   const opacity = trackValue(scene.tracks, player.id, 'opacity', time, 1);
   const visibility = trackValue(scene.tracks, player.id, 'visibility', time, 1);
@@ -237,7 +290,7 @@ function PlayerMarker({ player, project, scene, selected, clean, onSelect, time 
   return <g
     data-player-id={player.id}
     data-side={player.side}
-    aria-label={`${player.number} ${player.name}, ${player.position}`}
+    aria-label={`${player.number === undefined ? '' : player.number + ' '}${player.name}, ${player.role}`}
     role={onSelect && !clean ? 'button' : undefined}
     tabIndex={onSelect && !clean ? 0 : undefined}
     onKeyDown={onSelect && !clean ? (event) => {
@@ -250,19 +303,18 @@ function PlayerMarker({ player, project, scene, selected, clean, onSelect, time 
   >
     {!clean && <circle r="2.8" fill="transparent" />}
     {(selected || player.highlight) && <>
-      <circle r="2.88" fill="#ddfa50" fillOpacity=".17" />
-      <circle r="2.66" fill="none" stroke="#defb50" strokeWidth=".2" />
+      <circle r="2.88" fill={markAccent} fillOpacity=".17" />
+      <circle data-player-highlight={player.highlight ? 'true' : undefined} r="2.66" fill="none" stroke={markAccent} strokeWidth=".24" />
     </>}
     <ellipse cy=".66" rx="1.95" ry="1.6" fill="#030b08" fillOpacity=".44" />
     {scene.marker === 'shirt' ? <path d="M-.76-1.77 -.32-1.4 .32-1.4 .76-1.77 1.63-1.36 2.13-.4 1.39.02 1.08-.45 1.08 1.67 -1.08 1.67 -1.08-.45 -1.39.02 -2.13-.4 -1.63-1.36Z"
       fill={color} stroke="#fff" strokeOpacity=".57" strokeWidth=".12" strokeLinejoin="round" />
-      : <circle r={scene.marker === 'compact' ? '1.24' : '1.77'} fill={color} stroke="#fff" strokeOpacity=".55" strokeWidth=".13" />}
-    {scene.marker !== 'compact' && <text x="0" y=".08" fill={sideInk[player.side]} fontSize={scene.marker === 'shirt' ? '1.24' : '1.43'} fontWeight="790"
+      : player.side === 'away' ? <rect x={scene.marker === 'compact' ? '-1.24' : '-1.69'} y={scene.marker === 'compact' ? '-1.24' : '-1.69'}
+        width={scene.marker === 'compact' ? '2.48' : '3.38'} height={scene.marker === 'compact' ? '2.48' : '3.38'} rx=".66"
+        fill={color} stroke="#fffaf1" strokeOpacity=".8" strokeWidth=".17" />
+        : <circle r={scene.marker === 'compact' ? '1.24' : '1.77'} fill={color} stroke="#fffaf1" strokeOpacity=".69" strokeWidth=".16" />}
+    {scene.marker !== 'compact' && player.number !== undefined && <text x="0" y=".08" fill={markerInk(color, player.side)} fontSize={scene.marker === 'shirt' ? '1.34' : '1.62'} fontWeight="790"
       dominantBaseline="middle" textAnchor="middle" pointerEvents="none">{player.number}</text>}
-    {(scene.marker === 'name' || selected) && <g pointerEvents="none">
-      <rect x={-Math.min(name.length, 22) * .4 - .5} y="2.36" width={Math.min(name.length, 22) * .8 + 1} height="1.9" rx=".28" fill="#101917" fillOpacity=".95" />
-      <text y="3.42" fill="#f3f5f2" fontSize="1.09" fontWeight="680" textAnchor="middle" dominantBaseline="middle">{name.slice(0, 22)}</text>
-    </g>}
   </g>;
 }
 
@@ -272,12 +324,12 @@ function GraphicHandles({ object, project }: { object: TacticalObject; project: 
   if (object.curve) handles.push({ point: object.curve, id: 'curve' });
   return <g>
     {object.curve && <path d={path([object.points[0], object.curve, object.points[1] ?? object.points[0]], project)}
-      fill="none" stroke="#f0ffae" strokeOpacity=".56" strokeWidth=".14" strokeDasharray=".5 .45" pointerEvents="none" />}
+      fill="none" stroke="#ffe6a0" strokeOpacity=".72" strokeWidth=".14" strokeDasharray=".5 .45" pointerEvents="none" />}
     {handles.map(({ point, id }) => {
       const at = project(point);
       return <g key={id} data-handle={id} data-object-id={object.id}>
         <circle cx={at.x} cy={at.y} r="1.65" fill="transparent" />
-        <circle cx={at.x} cy={at.y} r={id === 'curve' ? '.62' : '.56'} fill={id === 'curve' ? '#defb50' : '#fff'} stroke="#182513" strokeWidth=".18" />
+        <circle cx={at.x} cy={at.y} r={id === 'curve' ? '.72' : '.56'} fill={id === 'curve' ? markAccent : '#fff'} stroke="#182513" strokeWidth=".18" />
       </g>;
     })}
   </g>;
@@ -285,7 +337,7 @@ function GraphicHandles({ object, project }: { object: TacticalObject; project: 
 
 export function Pitch({
   scene, time = 0, cueIndex, clean = false, transparent = false, media = false, mediaTime, mediaGuide, calibrationDraft, className, selected,
-  draft, style, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPlayerSelect,
+  draft, style, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onLostPointerCapture, onPlayerSelect,
 }: PitchProps) {
   const gradient = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const effective = useMemo(() => evaluateScene(scene, time, cueIndex), [scene, time, cueIndex]);
@@ -293,42 +345,49 @@ export function Pitch({
   const orientation = effective.orientation;
   const project = useMemo(() => media ? (point: Point) => point : (point: Point) => projectPoint(point, { view, orientation }), [media, view, orientation]);
   const viewBox = media ? [0, 0, 105, 68] : getViewBox(effective);
+  const labels = media ? undefined : markerLabels(effective, project, viewBox, clean ? undefined : selected);
   const ball = project(effective.ball);
   const footageTime = mediaTime ?? scene.media?.frame ?? time;
+  const mediaAspect = media && scene.media?.width && scene.media.height ? scene.media.width / scene.media.height : undefined;
   const alignment = scene.media?.alignment;
   const guide = useMemo(() => media && mediaGuide && !clean ? tryMediaCalibration(alignment) : undefined, [media, mediaGuide, clean, alignment]);
   return <svg xmlns="http://www.w3.org/2000/svg" viewBox={viewBox.join(' ')} className={className}
-    style={{ display: 'block', width: '100%', height: '100%', fontFamily: 'Inter, Arial, sans-serif', ...style }}
+    style={{ display: 'block', width: '100%', height: '100%', fontFamily: '"Inter Variable", Inter, Arial, sans-serif', ...style }}
     preserveAspectRatio={media ? 'none' : 'xMidYMid meet'}
     aria-label={media ? 'Media telestration canvas' : 'Football tactics pitch'}
-    onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
+    onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onLostPointerCapture={onLostPointerCapture}>
     {!transparent && !media && <Field project={project} theme={effective.theme} gradientId={`pitch-light-${gradient}`} />}
     {guide && <path data-media-guide="true" d={fieldMarkings.map((line) => path(line, guide.toMedia)).join(' ')}
-      fill="none" stroke="#defb50" strokeOpacity=".72" strokeWidth=".25" strokeDasharray=".7 .36" pointerEvents="none" />}
+      fill="none" stroke={markAccent} strokeOpacity=".72" strokeWidth=".25" strokeDasharray=".7 .36" pointerEvents="none" />}
     {media && calibrationDraft && !clean && <g data-calibration-draft="true" pointerEvents="none">
-      <path d={path(calibrationDraft, project)} stroke="#defb50" strokeWidth=".31" fill="none" strokeDasharray=".9 .4" />
+      <path d={path(calibrationDraft, project)} stroke={markAccent} strokeWidth=".31" fill="none" strokeDasharray=".9 .4" />
       {calibrationDraft.map((point, index) => <g key={index} transform={`translate(${coords(point)})`}>
-        <circle r="1.45" fill="#defb50" stroke="#132416" strokeWidth=".22" />
+        <circle r="1.45" fill={markAccent} stroke="#132416" strokeWidth=".22" />
         <text fontWeight="750" fontSize="1.55" textAnchor="middle" dominantBaseline="middle" fill="#132416">{index + 1}</text>
       </g>)}
     </g>}
     {effective.objects.filter((object) => !object.hidden && objectOnSurface(object, scene, media) && (!media || objectAtFootageTime(object, footageTime))).map((object) => (
       trackValue(effective.tracks, object.id, 'visibility', time, 1) !== 0 &&
       <TacticalGraphic key={object.id} object={object} project={project} clean={clean}
-        measurements={!media}
+        measurements={!media} mediaAspect={mediaAspect}
         selected={Boolean(selected?.has(object.id)) && !clean}
         opacity={trackValue(effective.tracks, object.id, 'opacity', time, object.opacity)}
         scale={trackValue(effective.tracks, object.id, 'scale', time, 1)} />
     ))}
     {!media && effective.players.map((player) => <PlayerMarker key={player.id} player={player} project={project} scene={effective} time={time}
       clean={clean} selected={Boolean(selected?.has(player.id)) && !clean} onSelect={onPlayerSelect} />)}
-    {!media && <g data-ball={clean ? undefined : 'true'} aria-label="Ball" transform={`translate(${coords(ball)})`}>
+    {labels && <g pointerEvents="none" aria-hidden="true">{[...labels.entries()].map(([id, { x, y, width, text }]) =>
+      <g key={id} transform={`translate(${x} ${y})`}>
+        <rect x={-width / 2} y="-1.38" width={width} height="2.76" rx=".39" fill="#141915" fillOpacity=".98" />
+        <text fill="#f4efe4" fontSize="1.82" fontWeight="720" textAnchor="middle" dominantBaseline="central">{text}</text>
+      </g>)}</g>}
+    {!media && <g data-ball={clean ? undefined : 'true'} data-owner-id={clean ? undefined : effective.ball.ownerId} aria-label="Ball" transform={`translate(${coords(ball)})`}>
       {!clean && <circle r="1.5" fill="transparent" />}
       <circle r=".83" cy=".19" fill="#081811" fillOpacity=".59" />
       <circle r=".67" fill="#f9faf2" stroke="#0c1512" strokeWidth=".12" />
       <path d="M0-.26 .25-.08 .15.24 -.15.24 -.25-.08Z" fill="#27352e" />
     </g>}
-    {draft && !clean && <g pointerEvents="none"><TacticalGraphic object={draft} project={project} clean selected={false} opacity={.88} measurements={!media} /></g>}
+    {draft && !clean && <g pointerEvents="none"><TacticalGraphic object={draft} project={project} clean selected={false} opacity={.88} measurements={!media} mediaAspect={mediaAspect} /></g>}
     {!clean && effective.objects.filter((object) => !object.hidden && !object.locked && objectOnSurface(object, scene, media) && selected?.has(object.id))
       .map((object) => <GraphicHandles key={object.id} object={object} project={project} />)}
   </svg>;

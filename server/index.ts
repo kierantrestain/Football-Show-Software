@@ -10,7 +10,10 @@ import { pathToFileURL } from 'node:url'
 import { handleFootball } from '../api/football'
 import { MAX_SESSION_BODY_BYTES, sessionService } from './session-service'
 import { diskSessionStore } from './session-store'
-import { validStudioSnapshot } from './studio-snapshot'
+import { diskAssetStore } from './session-asset-store'
+import { sessionAssetService } from './session-asset-service'
+import { MAX_FRAME_BYTES } from '../src/media-reference'
+import { studioRosterError, validStudioSnapshot } from './studio-snapshot'
 
 const mime: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -81,15 +84,32 @@ interface StudioServerOptions {
 export function createStudioServer(options: StudioServerOptions = {}) {
   const sessionDirectory = options.sessionDirectory ?? process.env.STUDIO_SESSION_DIR ?? '.studio-sessions'
   const staticDirectory = resolve(options.staticDirectory ?? 'dist')
-  const handleSession = sessionService(diskSessionStore(sessionDirectory), {
+  const sessions = diskSessionStore(sessionDirectory)
+  const assetStore = diskAssetStore(sessionDirectory)
+  const handleAsset = sessionAssetService(sessions, assetStore)
+  const handleSession = sessionService(sessions, {
+    assetStore,
     longPollMs: options.longPollMs ?? 14_000,
     pollAfterMs: 100,
-    validateContent: validStudioSnapshot,
+    validateContent: validStudioSnapshot, contentError: studioRosterError,
   })
 
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://studio.local')
+      if (url.pathname === '/api/session-asset') {
+        if (Number(request.headers['content-length']) > MAX_FRAME_BYTES) {
+          if (!await discardIncoming(request) && !response.destroyed) response.setHeader('connection', 'close')
+          return await writeResponse(response, Response.json({ error: 'A prepared frame exceeds the 4 MiB upload limit.' }, {
+            status: 413, headers: { 'cache-control': 'no-store' },
+          }))
+        }
+        const data = await handleAsset(browserRequest(request, response, url))
+        if (!request.complete && !response.destroyed) {
+          if (!await discardIncoming(request) && !response.destroyed) response.setHeader('connection', 'close')
+        }
+        return await writeResponse(response, data)
+      }
       if (url.pathname === '/api/session') {
         if (Number(request.headers['content-length']) > MAX_SESSION_BODY_BYTES) {
           // Discard the rejected request so clients receive 413 while uploading on a keep-alive connection.

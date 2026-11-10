@@ -1,5 +1,8 @@
 import type { Scene } from './domain'
 import { storage } from './storage'
+import type { Playout } from './playback'
+import type { SessionCredentials } from './session-types'
+import { MAX_FRAME_BYTES, MAX_FRAME_EDGE, MAX_SESSION_FRAMES, sceneFrameTime, validStagedFrame, type StagedFrame } from './media-reference'
 
 export function decodeImage(url: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -60,16 +63,70 @@ export async function loadSceneMedia(asset?: Scene['media']) {
   }
 }
 
-export async function sharedFrame(asset?: Scene['media']) {
+const canvasBlob = (canvas: HTMLCanvasElement, quality: number) => new Promise<Blob>((resolve, reject) => {
+  canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('The browser could not encode this frame.')), 'image/jpeg', quality)
+})
+
+async function prepareFrame(asset: NonNullable<Scene['media']>) {
   const loaded = await loadSceneMedia(asset)
-  if (!asset || !loaded) return undefined
+  if (!loaded) throw new Error('The source file is missing on this device.')
   try {
     const [width, height] = mediaDimensions(loaded.media)
-    const scale = Math.min(1, 1000 / Math.max(width, height))
+    if (!width || !height) throw new Error('The source image has no readable dimensions.')
     const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(width * scale))
-    canvas.height = Math.max(1, Math.round(height * scale))
-    canvas.getContext('2d')!.drawImage(loaded.media, 0, 0, canvas.width, canvas.height)
-    return { assetId: asset.assetId, url: canvas.toDataURL('image/jpeg', .78) }
+    const context = canvas.getContext('2d', { alpha: false })
+    if (!context) throw new Error('The browser could not prepare this frame.')
+    let scale = Math.min(1, MAX_FRAME_EDGE / Math.max(width, height))
+    for (const quality of [.94, .86, .74, .66]) {
+      canvas.width = Math.max(1, Math.round(width * scale))
+      canvas.height = Math.max(1, Math.round(height * scale))
+      context.fillStyle = '#09130f'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      context.drawImage(loaded.media, 0, 0, canvas.width, canvas.height)
+      const blob = await canvasBlob(canvas, quality)
+      if (blob.size <= MAX_FRAME_BYTES) {
+        const url = URL.createObjectURL(blob)
+        try { await decodeImage(url) } finally { URL.revokeObjectURL(url) }
+        return blob
+      }
+      scale *= .86
+    }
+    throw new Error('The prepared frame exceeds the 4 MiB playout limit.')
   } finally { loaded.dispose() }
+}
+
+export function frameEndpoint(id: string, key?: string) {
+  return `/api/session-asset?${new URLSearchParams(key ? { id, key } : { id })}`
+}
+
+export async function stageSessionAssets(credentials: SessionCredentials, content: Playout): Promise<Playout> {
+  const scenes = content.project.scenes.filter(scene => scene.media)
+  if (scenes.length > MAX_SESSION_FRAMES) throw new Error(`A shared rundown can stage up to ${MAX_SESSION_FRAMES} media scenes.`)
+  const frames = new Map<string, StagedFrame>()
+  const entries: [string, StagedFrame][] = []
+  for (const scene of scenes) {
+    const media = scene.media!
+    const frame = sceneFrameTime(media)
+    const identity = JSON.stringify([media.assetId, frame])
+    try {
+      let prepared = frames.get(identity)
+      if (!prepared) {
+        const blob = await prepareFrame(media)
+        const response = await fetch(frameEndpoint(credentials.id), {
+          method: 'POST', headers: { authorization: `Bearer ${credentials.token}`, 'content-type': 'image/jpeg' },
+          body: blob, signal: AbortSignal.timeout(30_000),
+        })
+        const uploaded = await response.json().catch(() => ({})) as Partial<StagedFrame> & { error?: string }
+        if (!response.ok) throw new Error(uploaded.error ?? 'The frame upload failed.')
+        const ref = { ...uploaded, assetId: media.assetId, frame }
+        if (!validStagedFrame(ref)) throw new Error('The studio did not return a valid prepared frame.')
+        prepared = ref
+        frames.set(identity, prepared)
+      }
+      entries.push([scene.id, prepared])
+    } catch (error) {
+      throw new Error(`Cannot stage “${scene.name}”. ${error instanceof Error ? error.message : 'The source could not be prepared.'}`, { cause: error })
+    }
+  }
+  return { ...content, sharedImage: undefined, mediaManifest: Object.fromEntries(entries) }
 }

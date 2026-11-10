@@ -32,6 +32,9 @@ function usePredictionStore() {
 function isScore(value: string) {
   return /^\d{1,2}$/.test(value)
 }
+function verifiedResult(match: Match) {
+  return match.status === 'finished' && (match.source.kind === 'demo' || match.verification?.status === 'verified') ? match.score : undefined
+}
 export function PredictionDesk({ matches, onQueueGraphic, producer = false }: { matches: Match[]; onQueueGraphic: (graphic: GraphicSpec) => void; producer?: boolean }) {
   const { store, storageError, update } = usePredictionStore()
   const matchList = matches
@@ -49,7 +52,7 @@ export function PredictionDesk({ matches, onQueueGraphic, producer = false }: { 
   const [override, setOverride] = useState(false)
   const active = matchList.find(match => match.id === fixture) || startingMatch
   const stored = store.predictions.find(pick => pick.matchId === active.id && pick.panelistId === panelist)
-  const actualScore = (active.status === 'finished' ? active.score : undefined) || store.demoResults[active.id]
+  const actualScore = verifiedResult(active) || (active.source.kind === 'demo' ? store.demoResults[active.id] : undefined)
   const cutoff = predictionCutoff(active.kickoff, store.rules)
   const closed = Date.now() >= cutoff.getTime() || active.status !== 'scheduled' || !!actualScore
   const canEdit = !closed || (producer && override)
@@ -61,7 +64,7 @@ export function PredictionDesk({ matches, onQueueGraphic, producer = false }: { 
     setStatus('')
     setOverride(false)
   }
-  const scoreByMatch = new Map(matchList.filter(match => match.season === active.season).map(match => [match.id, match.status === 'finished' ? match.score : store.demoResults[match.id]]))
+  const scoreByMatch = new Map(matchList.filter(match => match.season === active.season).map(match => [match.id, verifiedResult(match) || (match.source.kind === 'demo' ? store.demoResults[match.id] : undefined)]))
   const leaderboard = store.panel.map(person => {
     const submitted = store.predictions.filter(pick => pick.panelistId === person.id && scoreByMatch.has(pick.matchId))
     const settled = submitted.flatMap(pick => {

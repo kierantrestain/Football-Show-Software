@@ -1,0 +1,78 @@
+.media-upload-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.tac-media-controls .media-upload-group .media-upload {
+  min-height: 34px;
+  padding-inline: 9px;
+  font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .tac-media-controls .media-upload-group .button,
+  .tac-media-controls .media-upload-group .icon-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 540px) {
+  .tac-media-controls .media-upload-group .media-upload {
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+  .tac-media-controls .media-upload-group .media-upload span {
+    display: inline;
+  }
+}
+
+.present-stage:has(.tactics-workspace) {
+  min-height: 360px;
+}
+
+.present-identity {
+  min-width: 0;
+}
+
+.present-identity-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.present-header .present-identity h1 {
+  margin: 4px 0 0;
+  font-size: clamp(24px, 3vw, 39px);
+  line-height: 1.06;
+}
+
+.present-identity h1 span,
+.present-segment {
+  color: var(--muted);
+}
+
+.present-segment {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.present-rundown {
+  display: flex;
+  gap: 6px;
+  padding: 7px 1px 2px;
+  overflow-x: auto;
+}
+
+.present-rundown .button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.present-rundown .button[aria-current] {
+  border-color: var(--accent);
+  color: var(--accent);
+}

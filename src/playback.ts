@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Project, Scene } from './domain'
 import type { GraphicSpec } from './data'
+import type { MediaManifest } from './media-reference'
 
 export type OutputFormat = '16:9' | '9:16' | 'Overlay'
 export type Playout = {
@@ -15,6 +16,8 @@ export type Playout = {
   graphics?: GraphicSpec[]
   pip?: boolean
   format: OutputFormat
+  mediaManifest?: MediaManifest
+  /** Legacy active-frame payload retained for saved sessions. */
   sharedImage?: { assetId: string; url: string }
 }
 

@@ -1,7 +1,11 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUpRight, Check, ChevronDown, Clapperboard, Database, Download, Film, Home, Layers3, Monitor, Radio, Redo2, Undo2, WifiOff } from 'lucide-react'
 import { DataCenter, GraphicsLibrary, type GraphicSpec, type LoadTacticsPayload } from './data'
-import { formations, makeLineup, newScene, sampleProject, uid, validateProject, type FormationName, type Project, type Scene } from './domain'
+import { newScene, sampleProject, uid, validateProject, type Project, type Scene } from './domain'
+import { projectFromFixture } from './matchProject'
+import { canTakeProgramme, rosterBasisLabel, sceneRosterIssues } from './roster'
+import { RosterRepair } from './RosterRepair'
+import { Scorebug } from './Scorebug'
 import { TacticsEditor } from './TacticsEditor'
 import { Transport } from './Transport'
 import { ExportDialog, SceneSettings } from './ProjectDialogs'
@@ -10,13 +14,21 @@ import { OutputRoute, PresenterConsole, RemoteRoute } from './Presentation'
 import { useEditorMedia } from './MediaPanel'
 import { exportProject, importProject, storage } from './storage'
 import { exportScene } from './export'
-import { sharedFrame } from './mediaDecode'
-import { createSession, useSession } from './session'
+import { stageSessionAssets } from './mediaDecode'
+import { commitSessionAction, createSession, useSession } from './session'
 import type { SessionCredentials } from './session-types'
 import { currentScene, initialPlayout, setLocalPreview, switchCue, switchScene, timeAt, togglePlay, usePlayoutTime, type Playout } from './playback'
 import { IconButton, Modal } from './ui'
 
 const DEMO = initialPlayout(sampleProject)
+const EMPTY = initialPlayout({
+  version: 1, id: 'untitled-rundown', name: 'Untitled rundown',
+  match: { home: 'Home', away: 'Away', homeShort: 'HOM', awayShort: 'AWY', competition: 'Studio desk', score: '', source: 'Untitled production' },
+  scenes: [{ ...newScene(), name: 'Programme preview', players: [] }],
+})
+function demoMode() {
+  return new URLSearchParams(location.search).get('mode') === 'demo' || location.pathname === `/editor/${sampleProject.id}`
+}
 const credentialsKey = 'touchline-producer-sessions'
 const activeKey = 'touchline-active-project'
 const graphicsKey = (id: string) => `touchline-graphics-${id}`
@@ -54,25 +66,28 @@ export function App() {
     window.scrollTo(0, 0)
   }, [])
   const [, surface, id] = path.split('/')
-  if (surface === 'output' && id) return <OutputRoute key={path} id={id} fallback={DEMO} />
-  if (surface === 'remote' && id) return <Boundary><RemoteRoute key={path} id={id} fallback={DEMO} /></Boundary>
+  if (surface === 'output' && id) return <OutputRoute key={path} id={id} fallback={demoMode() ? DEMO : EMPTY} />
+  if (surface === 'remote' && id) return <Boundary><RemoteRoute key={path} id={id} fallback={demoMode() ? DEMO : EMPTY} /></Boundary>
   return <Boundary><Studio path={path} navigate={navigate} /></Boundary>
 }
 
-function EditorCanvas({ playout, onChange, onReconstruct, onError }: {
-  playout: Playout; onChange: (scene: Scene) => void; onReconstruct: (scene: Scene) => void; onError: (error: unknown) => void
+function EditorCanvas({ playout, onChange, onReconstruct, onPreviewMovement, onError }: {
+  playout: Playout; onChange: (scene: Scene) => void; onReconstruct: (scene: Scene) => void; onPreviewMovement: (start: number) => void; onError: (error: unknown) => void
 }) {
   const scene = currentScene(playout)
   const time = usePlayoutTime(playout, scene.duration)
   const { media, controls, upload, mediaTime } = useEditorMedia(scene, onChange, onError)
   return <div className="editor-canvas">
-    <TacticsEditor key={scene.id} scene={scene} match={playout.project.match} time={time} cueIndex={playout.cue} onChange={onChange} media={media || undefined} mediaTime={mediaTime} mediaControl={upload} onReconstruct={onReconstruct} transparent={!!media} />
+    <TacticsEditor key={scene.id} scene={scene} match={playout.project.match} time={time} cueIndex={playout.cue} onChange={onChange} media={media || undefined} mediaTime={mediaTime} mediaControl={upload} onReconstruct={onReconstruct} onPreviewMovement={onPreviewMovement} transparent={!!media && scene.surface !== 'pitch'} />
     {controls}
   </div>
 }
 
 function Studio({ path, navigate }: { path: string; navigate: (path: string) => void }) {
-  const [playout, setPlayout] = useState(DEMO)
+  const [rehearsal, setRehearsal] = useState(demoMode)
+  const [playout, setPlayout] = useState(() => demoMode() ? DEMO : EMPTY)
+  const [hasProject, setHasProject] = useState(demoMode)
+  const [showRepair, setShowRepair] = useState(false)
   const [ready, setReady] = useState(false)
   const [save, setSave] = useState('Opening')
   const [past, setPast] = useState<Project[]>([])
@@ -85,32 +100,41 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
   const [exporting, setExporting] = useState<number | null>(null)
   const [credentials, setCredentials] = useState(() => stored<Record<string, SessionCredentials>>(credentialsKey, {}))
   const [starting, setStarting] = useState(false)
+  const [staging, setStaging] = useState(false)
   const importFile = useRef<HTMLInputElement>(null)
   const pathOnLoad = useRef(path)
   const { project } = playout
   const scene = currentScene(playout)
   const session = credentials[project.id] ?? null
   const desk = useSession<Playout>(path.startsWith('/present/') ? null : session)
-  const editor = path === '/' || path.startsWith('/editor/')
+  const editor = (path === '/' && rehearsal) || path.startsWith('/editor/')
+  const homePage = (path === '/' && !rehearsal) || path === '/studio'
+  const rosterIssues = editor ? sceneRosterIssues(project, scene) : []
   const notify = useCallback((error: unknown) => setNotice(errorText(error)), [])
   useEffect(() => {
     let active = true
     const route = pathOnLoad.current.match(/^\/(?:editor|present)\/([^/]+)$/)
-    const id = route?.[1] ?? stored(activeKey, sampleProject.id)
+    const id = route?.[1] ?? (demoMode() ? sampleProject.id : stored(activeKey, EMPTY.project.id))
     void storage.project(id).then(entry => {
       if (!active) return
-      if (entry) setPlayout({ ...initialPlayout(validateProject(entry.project)), graphics: stored(graphicsKey(id), []) })
-      else if (route && id !== sampleProject.id) setNotice('That production is not saved on this device. The demo is open.')
+      if (entry) {
+        const saved = validateProject(entry.project)
+        setPlayout({ ...initialPlayout(saved), graphics: stored(graphicsKey(id), []) })
+        setHasProject(true)
+      } else if (route && id !== sampleProject.id && id !== EMPTY.project.id) {
+        setNotice('That production is not saved on this device.')
+        navigate('/studio')
+      }
     }).catch(notify).finally(() => { if (active) setReady(true) })
     return () => { active = false }
-  }, [notify])
+  }, [navigate, notify])
   useEffect(() => {
-    if (!ready) return
+    if (!ready || !hasProject) return
     let active = true
     remember(activeKey, project.id)
     void storage.save(project).then(() => { if (active) setSave('Saved locally') }).catch(error => { if (active) { setSave('Save failed'); notify(error) } })
     return () => { active = false }
-  }, [project, ready, notify])
+  }, [project, ready, hasProject, notify])
   useEffect(() => {
     if (!notice) return
     const timer = setTimeout(() => setNotice(''), 6500)
@@ -155,6 +179,8 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
   }
   function open(next: Project) {
     setSave('Saving…')
+    setHasProject(true)
+    setShowRepair(false)
     setPast([]); setFuture([]); setPlayout({ ...initialPlayout(next), graphics: stored(graphicsKey(next.id), []) })
     navigate(`/editor/${next.id}`)
   }
@@ -174,7 +200,10 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
   function queue(graphic: GraphicSpec) {
     const graphics = [graphic, ...(playout.graphics ?? []).filter(item => item.id !== graphic.id)].slice(0, 20)
     const next = { ...playout, graphic, graphics }
+    const issue = canTakeProgramme(next)
+    if (issue) { setNotice(issue); return }
     remember(graphicsKey(project.id), graphics)
+    setHasProject(true)
     setPlayout(next)
     setLocalPreview(next)
     if (session) {
@@ -183,53 +212,64 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     } else setNotice('Graphic queued in local presentation.')
   }
   function loadMatch(payload: LoadTacticsPayload) {
-    const next = newScene()
-    const home = Object.hasOwn(formations, payload.home.formation) ? payload.home.formation as FormationName : next.homeFormation
-    const away = Object.hasOwn(formations, payload.away.formation) ? payload.away.formation as FormationName : next.awayFormation
-    const lineup = (side: 'home' | 'away', formation: FormationName, roster: LoadTacticsPayload['home']['players']) => {
-      const result = makeLineup(side, formation, roster)
-      return payload.moment && roster.length > 0 && roster.length < 11 ? result.slice(0, roster.length) : result
-    }
-    open({
-      version: 1, id: uid(), name: payload.title,
-      match: { home: payload.home.name, away: payload.away.name, homeShort: payload.home.shortName, awayShort: payload.away.shortName, competition: payload.competition ?? 'Match analysis', score: payload.score?.join('–') ?? '', source: payload.source },
-      scenes: [{
-        ...next, name: payload.moment?.title ?? 'Starting Shape', homeFormation: home, awayFormation: away,
-        players: [...lineup('home', home, payload.home.players), ...lineup('away', away, payload.away.players)],
-        notes: payload.moment?.description ?? '', classification: payload.classification,
-        sourceReference: { label: payload.source, estimated: true },
-      }],
-    })
+    const next = projectFromFixture(payload)
+    if (next.match.fixture) setRehearsal(false)
+    open(next)
+    if (sceneRosterIssues(next, next.scenes[0]).length) setShowRepair(true)
+  }
+  function openRehearsal() {
+    setRehearsal(true)
+    void storage.project(sampleProject.id).then(entry => open(entry?.project ?? sampleProject)).catch(notify)
+  }
+  function goData(matchId?: string) {
+    const query = new URLSearchParams()
+    if (matchId) query.set('match', matchId)
+    navigate(`/data${query.size ? '?' + query : ''}`)
   }
   function named(mode: 'new' | 'rename') { setTitle(mode === 'rename' ? project.name : ''); setDialog(mode); setMenu(false) }
   function saveVersion() {
     setMenu(false)
     void storage.saveVersion({ id: uid(), title: project.name, savedAt: Date.now(), project }).then(() => setNotice('Version saved locally.')).catch(notify)
   }
-  function launchLocal() { setLocalPreview(playout); window.open('/output/local', '_blank', 'noopener,noreferrer') }
-  async function sharedMedia(content: Playout): Promise<Playout> {
-    return { ...content, sharedImage: await sharedFrame(currentScene(content).media) }
+  function launchLocal() {
+    const issue = canTakeProgramme(playout)
+    if (issue) { setNotice(issue); setShowRepair(true); return }
+    setLocalPreview(playout)
+    window.open('/output/local', '_blank', 'noopener,noreferrer')
   }
   async function stage(content = playout) {
+    if (!session || staging) return
+    const issue = canTakeProgramme(content)
+    if (issue) { setNotice(issue); setShowRepair(true); return }
+    setStaging(true)
     try {
-      const success = await desk.send({ type: 'stage', content: await sharedMedia(content) })
-      if (success) setNotice('Preview staged separately from the on-air feed.')
+      const success = await desk.send({ type: 'stage', content: await stageSessionAssets(session, content) })
+      if (success) setNotice('Rundown staged. Preview is separate from the on-air feed.')
     } catch (error) { notify(error) }
+    finally { setStaging(false) }
   }
   async function start() {
     if (starting) return
+    const issue = canTakeProgramme(playout)
+    if (issue) { setNotice(issue); return }
     setStarting(true)
     try {
-      const { credentials: next } = await createSession(await sharedMedia(playout))
+      // The first stage carries only authorised frame references.
+      const created = await createSession(playout)
+      const staged = await stageSessionAssets(created.credentials, playout)
+      if (Object.keys(staged.mediaManifest ?? {}).length) {
+        await commitSessionAction(created.credentials, { type: 'stage', content: staged }, created.state.revision)
+      }
+      const next = created.credentials
       setCredentials(current => { const record = { ...current, [project.id]: next }; remember(credentialsKey, record); return record })
       navigate(`/present/${project.id}`)
     } catch (error) { notify(error) }
     finally { setStarting(false) }
   }
-  const present = () => { setLocalPreview(playout); navigate(`/present/${project.id}`) }
+  const present = () => { if (!canTakeProgramme(playout)) setLocalPreview(playout); navigate(`/present/${project.id}`) }
 
   useEffect(() => {
-    if (editor) setLocalPreview(playout)
+    if (editor && !canTakeProgramme(playout)) setLocalPreview(playout)
   }, [editor, playout])
   useEffect(() => {
     if (!editor || dialog) return
@@ -259,15 +299,15 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     {starting && <div className="toast" role="status">Creating shared session…</div>}{toast}
   </>
   const routes = [
-    { label: 'Studio', url: '/studio', icon: Home, current: path === '/studio' },
-    { label: 'Tactics', url: `/editor/${project.id}`, icon: Clapperboard, current: editor },
-    { label: 'Match data', url: '/data', icon: Database, current: path === '/data' },
-    { label: 'Graphics', url: '/graphics', icon: Layers3, current: path === '/graphics' },
+    { label: 'Studio', url: '/studio', icon: Home, current: homePage },
+    { label: 'Tactics', url: `/editor/${project.id}`, icon: Clapperboard, current: editor, disabled: !hasProject },
+    { label: 'Match data', url: rehearsal ? '/data?mode=demo' : '/data', icon: Database, current: path === '/data' },
+    { label: 'Graphics', url: rehearsal ? '/graphics?mode=demo' : '/graphics', icon: Layers3, current: path === '/graphics' },
   ]
   return <div className={`studio-shell ${editor ? 'editor-shell' : ''}`}>
     <header className="masthead">
-      <button className="brand" onClick={() => navigate('/studio')} aria-label="Touchline Studio home"><img src="/touchline.svg" alt="" /><span>TOUCHLINE<small>STUDIO</small></span></button>
-      <nav aria-label="Studio environments">{routes.map(({ label, url, icon: Icon, current }) => <button key={url} aria-current={current ? 'page' : undefined} onClick={() => navigate(url)}><Icon size={16} /><span>{label}</span></button>)}</nav>
+      <button className="brand" onClick={() => navigate('/studio')} aria-label="Bang On Sports Hub studio home"><img src="/touchline.svg" alt="" /><span>BANG ON<small>SPORTS HUB</small></span></button>
+      <nav aria-label="Studio environments">{routes.map(({ label, url, icon: Icon, current, disabled }) => <button key={url} aria-current={current ? 'page' : undefined} disabled={disabled} onClick={() => navigate(url)}><Icon size={16} /><span>{label}</span></button>)}</nav>
       <div className="mast-status"><span><i />{online ? 'Studio ready' : 'Offline'}</span><button className="button quiet" onClick={present}><Monitor size={17} /> Presenter desk <ArrowUpRight size={13} /></button></div>
     </header>
     {!online && <div className="offline-banner" role="status"><WifiOff size={15} /> Offline · Local productions are available. Shared output retains its last state.</div>}
@@ -285,31 +325,34 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
         <span className="save-status"><Check size={14} /> {save}</span>
         <div className="command-spacer" />
         <div className="undo-controls"><IconButton label="Undo" disabled={!past.length} onClick={undo}><Undo2 size={17} /></IconButton><IconButton label="Redo" disabled={!future.length} onClick={redo}><Redo2 size={17} /></IconButton></div>
-        {session && <button className="button" disabled={desk.connection !== 'connected'} onClick={() => void stage()}>Stage preview</button>}
+        {session && <button className="button" disabled={staging || desk.connection !== 'connected'} onClick={() => void stage()}>{staging ? 'Staging rundown…' : 'Stage preview'}</button>}
         <button className="button quiet" onClick={launchLocal}><Monitor size={16} /> <span>Output</span></button>
         <button className="button quiet" onClick={() => setDialog('export')}><Download size={16} /> <span>Export</span></button>
         <button className="button primary" onClick={present}><Radio size={17} /> Present</button>
       </div>
       <main className="editor-main">
         <section className="match-ribbon">
-          <div className="match-context"><span className="eyebrow"><i /> Match analysis <span> / </span> {project.match.competition}</span><h1>{scene.name}</h1></div>
-          <div className="ribbon-score" aria-label={`${project.match.home} against ${project.match.away}`}>
-            <span><i className="team-indicator home" /> <b>{project.match.home}</b><small>{scene.homeFormation}</small></span>
-            <strong>{project.match.score || 'v'}</strong>
-            <span><i className="team-indicator away" /> <b>{project.match.away}</b><small>{scene.awayFormation}</small></span>
+          <div className="match-context"><span className="eyebrow">{project.match.competition}</span><h1>{scene.name}</h1></div>
+          <Scorebug match={project.match} surface="editor" />
+          <div className="ribbon-scene">
+            <span className={`status-tag ${desk.state?.mode === 'live' ? 'live' : ''}`}><i />{desk.state?.mode === 'live' ? 'On air' : desk.state?.mode === 'hold' ? 'Output held' : 'Preview'}</span>
+            <small>{scene.roster ? `Estimated positions · ${scene.roster.home.basis === scene.roster.away.basis ? rosterBasisLabel(scene.roster.home.basis) : 'Mixed XI sources'}` : project.match.source}</small>
           </div>
-          <div className="ribbon-scene"><span className="status-tag"><i /> {scene.classification}</span><small>{project.match.source}</small></div>
         </section>
-        <EditorCanvas key={scene.id} playout={playout} onChange={commitScene} onReconstruct={reconstruct} onError={notify} />
+        {rosterIssues.length > 0 && <section className="roster-banner" aria-label="Roster repair status"><span>{rosterIssues.join(' ')}</span><button className="button primary" onClick={() => setShowRepair(true)}>Roster repair</button></section>}
+        <EditorCanvas key={scene.id} playout={playout} onChange={commitScene} onReconstruct={reconstruct}
+          onPreviewMovement={start => setPlayout(value => ({ ...value, time: start, startedAt: Date.now() }))} onError={notify} />
         <Transport playout={playout} onChange={setPlayout} onAdd={() => addScene()} onDetails={() => setDialog('scene')} />
       </main>
     </>}
-    {path === '/studio' && <StudioHome project={project} sessionId={session?.id} onOpen={open} onNew={() => named('new')} onDuplicate={copyProject}
+    {homePage && <StudioHome project={hasProject ? project : undefined} onRehearsal={openRehearsal} sessionId={session?.id} onOpen={open} onNew={() => named('new')} onDuplicate={copyProject}
       onImport={() => importFile.current?.click()} onTemplate={template => { addScene(template.scene); navigate(`/editor/${project.id}`) }}
-      onRestore={snapshot => copyProject(snapshot.project, 'restored')} onData={matchId => navigate(matchId ? `/data?match=${encodeURIComponent(matchId)}` : '/data')} onGraphics={() => navigate('/graphics')} onPresent={present} onError={notify} />}
+      onRestore={snapshot => copyProject(snapshot.project, 'restored')} onData={goData} onGraphics={() => navigate('/graphics')} onPresent={present} onError={notify} />}
     {path === '/data' && <DataCenter producer={desk.state?.role === 'producer' && desk.connection === 'connected'} initialMatchId={new URLSearchParams(location.search).get('match') ?? undefined} onLoadTactics={loadMatch} onQueueGraphic={queue} />}
-    {path === '/graphics' && <GraphicsLibrary onQueueGraphic={queue} />}
-    {path !== '/studio' && path !== '/data' && path !== '/graphics' && !editor && <main className="recovery"><h1>Studio route unavailable</h1><button className="button primary" onClick={() => navigate('/')}>Open editor</button></main>}
+    {path === '/graphics' && <GraphicsLibrary fixture={project.match.fixture} rehearsal={rehearsal || demoMode()} onQueueGraphic={queue} />}
+    {!homePage && path !== '/data' && path !== '/graphics' && !editor && <main className="recovery"><h1>Studio route unavailable</h1><button className="button primary" onClick={() => navigate('/')}>Open editor</button></main>}
+    {showRepair && editor && <RosterRepair project={project} scene={scene} onClose={() => setShowRepair(false)}
+      onCommit={next => { commitScene(next); setShowRepair(false) }} onFind={() => { setShowRepair(false); navigate('/data') }} />}
     {dialog === 'scene' && <SceneSettings scene={scene} index={sceneIndex} count={project.scenes.length} onChange={commitScene} onClose={() => setDialog(null)}
       onMove={delta => { const items = [...project.scenes]; items.splice(sceneIndex + delta, 0, ...items.splice(sceneIndex, 1)); commit({ ...project, scenes: items }) }}
       onDelete={() => { const items = project.scenes.filter(item => item.id !== scene.id); commit({ ...project, scenes: items }, items[Math.max(0, sceneIndex - 1)].id) }}
@@ -320,7 +363,7 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
       <form onSubmit={event => { event.preventDefault(); if (!title.trim()) return; if (dialog === 'rename') commit({ ...project, name: title.trim() }); else open({
         version: 1, id: uid(), name: title.trim(),
         match: { home: 'Home', away: 'Away', homeShort: 'HOM', awayShort: 'AWY', competition: 'Tactical board', score: '', source: 'Manual line-up' },
-        scenes: [newScene()],
+        scenes: [{ ...newScene(), players: [] }],
       }); setDialog(null) }}>
         <label className="form-field">Production name<input autoFocus value={title} onChange={event => setTitle(event.target.value)} required maxLength={100} /></label>
         <div className="modal-actions"><button className="button primary" type="submit">{dialog === 'new' ? 'Create production' : 'Save name'}</button></div>

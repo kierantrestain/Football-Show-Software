@@ -1,35 +1,36 @@
-# Touchline Studio Design System
+# Bang On Sports Hub · Touchline Studio
 
-## Design intent
+The fixture and scene sit above a full-width analysis surface. Preview and On Air are separate, written states. The surface switch and import controls sit together. Move, Pass, Run, Shot, Spotlight and Draw stay visible at the canvas edge. The current action step is directly underneath. Camera and still framing sit apart from the movement tools.
 
-Touchline borrows the density of a vision mixer and the clear hierarchy of a match-day graphics package. The canvas carries the visual weight. Production controls occupy shallow fixed strips and contextual panels.
+Details opens a contextual overlay for properties, team setup, layers and timing. The drawer never changes the canvas scale. The scene strip below the canvas remains available for cueing and playback. Pitch edits and still marks belong to separate surfaces within the same scene.
 
-| Token | Value | Use |
-| --- | --- | --- |
-| Background | `#101313` | App shell |
-| Surface | `#171b1a` | Inspector and controls |
-| Raised surface | `#202624` | Hover and selection base |
-| Line | `#2b3230` | Boundaries and section dividers |
-| Text | `#f0f2ea` | Primary labels |
-| Muted | `#9ca8a0` | Metadata |
-| Accent | `#dbfb48` | Selection, primary action and analysis |
-| Danger | `#ff706d` | On-air and destructive actions |
-| Home | Coral | Home team and badge accent |
-| Away | Ice blue | Away team and badge accent |
+## Colour and type
 
-The tokens are implemented in `src/studio.css`. Inter handles controls, Barlow Condensed gives scene names and match graphics a narrow sports editorial character, and JetBrains Mono supplies timing and technical metadata. Control type is 12–14px, panel titles 14–16px, and editor headlines 36–48px. Broadcast headings scale with the stage. Uppercase is reserved for channels, modes, and short identifiers.
+| Role | Token |
+| --- | --- |
+| Studio graphite | `#141615` |
+| Primary text | `#f4efe4` |
+| Tactics controls | `#1b1e1d` |
+| Tactics secondary text | `#b2b6ae` |
+| Active step background | `#171c19` |
+| Selection and primary action | `#f6cb59` |
+| Live indicator | `#ff645c` |
+| Pitch | `#254638` with low-contrast `#2b4c3e` mowing stripes |
 
-Spacing follows a 4px unit. Navigation and command strips are 57px and 54px. Desktop icon controls are 34px, and tablet controls use 44–64px touch targets. The focused element gets a lime outline. Muted labels pair with an icon or written status. Reduced motion turns off chrome transitions.
+Inter handles controls and names. Barlow Condensed gives editorial headlines a narrower footprint. JetBrains Mono labels status, scene timing and field coordinates. Score cells use tabular numbers. Primary editor labels are 12 CSS px and 650 weight. The layout uses a 4 px spacing rhythm, a 48 px surface header, a 50 px tool row and an inline action step on a wide desk. Primary touch buttons have at least 44 × 44 CSS px targets. An offset amber outline indicates focus.
 
-Markers stay high-contrast on pitch themes and retain numbers or labels across crops. Lines use round caps and wide invisible hit areas. Passes and runs use distinct stroke and dash treatments. Present and output use broadcast-safe framing. Output displays no selection handles, cursor, transport buttons, or connection overlays.
+Key text pair contrast ratios are 15.85:1 for warm text on the studio graphite, 8.38:1 for muted tactics text on the step strip and 7.87:1 for amber text on a selected tool. The live scorebug state uses pale text on scarlet with a measured 5.64:1 ratio. These pairs exceed the 4.5:1 minimum for normal text. [W3C contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html) · [W3C enhanced target size](https://www.w3.org/WAI/WCAG22/Understanding/target-size-enhanced.html)
 
-The studio collapses at tablet widths into a canvas-first flow. Presenter layouts stack in portrait and use a large stage with a separate cue column in landscape.
+## Analysis surfaces
 
-## Research
+The pitch uses circles for the home side and rounded squares for the away side in number, name and compact views. A highlighted player carries an amber ring. Surname tags try positions around the marker and avoid other markers, labels and the viewport edge. A name is prioritised for a selected or highlighted player. A marker with an unknown shirt number has an empty face.
 
-Design guidance was reviewed for hierarchy, focused contrast, visual audits, and motion restraint. The reference broadcast and telestration tools informed the division between preparation, drawing, and delivery. Touchline uses original visuals and geometry.
+A pass is a playable amber ball path. A drawn arrow defaults to warm off-white and remains an annotation. Runs start curved, with a draggable amber bend. The selected path exposes Curve, Reverse and Preview move at the canvas edge. A pointer gesture commits once on release. Cancelling the gesture discards its transient preview. Cue time and scrub time use the same evaluator.
 
-- [UI/UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), [Google DESIGN.md](https://github.com/google-labs-code/design.md), [Awesome DESIGN.md](https://github.com/VoltAgent/awesome-design-md)
-- [Taste Skill](https://github.com/Leonxlnx/taste-skill), [Impeccable](https://github.com/pbakaus/impeccable), [Hallmark](https://github.com/Nutlope/hallmark)
-- [Emil Kowalski’s design skills](https://github.com/emilkowalski/skills), [GSAP Skills](https://github.com/greensock/gsap-skills)
-- [Coach Paint](https://www.coachpaint.com/), [Metrica](https://www.metrica-sports.com/), [TacticalPad](https://www.tacticalpad.com/), [Nacsport](https://www.nacsport.com/)
+Stills fit their native aspect ratio. The 125% and 150% centred views zoom the editor surface and overlay together. They are inspection views, so exported and on-air stills retain fit framing. A still mark is stored by asset ID. Its fixed 105 × 68 SVG coordinate plane represents the image fractions `x / 105` and `y / 68` across aspect ratios. Hit tests invert the same SVG transform. The still drawer hides video-only range fields.
+
+## Clean feed
+
+The 16:9 programme composition keeps key text within its title-safe inset. The scorebug balances two club strips around a fixed-width score cell and a separate clock or status cell. The result card puts club names beside a large score, with competition, stage and source in secondary tiers. Club text and colour identifiers remain legible independently. The viewer receives the staged programme content and shows no selection handles, controls or editor overlays.
+
+Reduced-motion settings suppress decorative interface transitions. Analyst-initiated replay remains an explicit control. [OBS Browser Source](https://obsproject.com/kb/browser-source)

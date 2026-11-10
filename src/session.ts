@@ -5,6 +5,7 @@ export type { InviteRole, PresenterRole, SessionAction, SessionCredentials, Sess
 
 type Connection = 'idle' | 'connecting' | 'connected' | 'offline' | 'error'
 const apiPath = '/api/session'
+const offlineNotice = 'Connection lost. The last studio state remains visible while reconnecting.'
 
 function sessionRequest(credentials: SessionCredentials, since?: SessionState<unknown>) {
   const params = new URLSearchParams({ id: credentials.id })
@@ -71,6 +72,7 @@ interface Transport<T> {
   latest: SessionState<T> | null
   controller: AbortController
   sending: boolean
+  online: boolean
   accept(next: SessionState<T>): void
   report(connection: Connection, error: string | null): void
 }
@@ -115,6 +117,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
     if (!key) return
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
+    let polling: AbortController | undefined
     let failures = 0
     let confirmed: SessionState<T> | null = null
     const retained = retainOnAir ? loadOnAir<T>(id) : null
@@ -123,8 +126,9 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
       latest: retained,
       controller,
       sending: false,
+      online: navigator.onLine,
       accept(next) {
-        if (controller.signal.aborted || next.id !== id) return
+        if (controller.signal.aborted || !client.online || !navigator.onLine || next.id !== id) return
         const current = confirmed
         if (current && (next.revision < current.revision ||
           (next.revision === current.revision && next.serverTime < current.serverTime))) return
@@ -137,20 +141,25 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
         }))
       },
       report(connection, error) {
-        if (!controller.signal.aborted) setView({ key, state: client.latest, connection, error })
+        if (!controller.signal.aborted && (client.online || connection === 'offline')) setView({ key, state: client.latest, connection, error })
       },
     }
     transport.current = client
-    if (retained) client.report('connecting', null)
+    if (!client.online) client.report('offline', offlineNotice)
+    else if (retained) client.report('connecting', null)
 
     async function poll() {
       timer = undefined
+      if (controller.signal.aborted || !client.online || polling) return
+      const pending = new AbortController()
+      polling = pending
       let interval = 1800
       try {
         const response = await studioFetch(sessionRequest({ id, token }, confirmed ?? undefined), {
           cache: 'no-store',
           headers: authHeaders(token),
-        }, 24_000, controller.signal)
+        }, 24_000, pending.signal)
+        if (pending.signal.aborted || !navigator.onLine) return
         const serverInterval = Number(response.headers.get('x-studio-poll-after') ?? NaN)
         if (Number.isFinite(serverInterval)) interval = Math.max(80, Math.min(5000, serverInterval))
         if (!response.ok) {
@@ -162,7 +171,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
           failures = 0
           if (response.status === 204) {
             setView(previous => {
-              if (controller.signal.aborted || (previous.key === key && previous.connection === 'connected')) return previous
+              if (controller.signal.aborted || !client.online || pending.signal.aborted || (previous.key === key && previous.connection === 'connected')) return previous
               return { key, state: client.latest, connection: 'connected', error: null }
             })
           } else {
@@ -170,32 +179,39 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
           }
         }
       } catch {
-        if (!controller.signal.aborted) {
-          client.report('offline', 'Connection lost. The last studio state remains visible while reconnecting.')
+        if (!controller.signal.aborted && !pending.signal.aborted && client.online) {
+          client.report('offline', offlineNotice)
           failures++
         }
       } finally {
-        if (!controller.signal.aborted) {
+        polling = undefined
+        if (!controller.signal.aborted && client.online) {
           const delay = failures ? Math.min(12_000, Math.max(700, interval) * 2 ** Math.min(failures, 4)) : interval
-          timer = setTimeout(poll, delay)
+          timer = setTimeout(poll, pending.signal.aborted ? 0 : delay)
         }
       }
     }
 
     function reconnect() {
-      if (timer) {
-        clearTimeout(timer)
-        timer = undefined
-        void poll()
-      }
+      client.online = true
+      failures = 0
+      if (timer) clearTimeout(timer)
+      void poll()
     }
 
-    const disconnect = () => client.report('offline', 'Connection lost. The last studio state remains visible while reconnecting.')
+    function disconnect() {
+      client.online = false
+      if (timer) clearTimeout(timer)
+      timer = undefined
+      polling?.abort()
+      client.report('offline', offlineNotice)
+    }
     window.addEventListener('online', reconnect)
     window.addEventListener('offline', disconnect)
     void poll()
     return () => {
       controller.abort()
+      polling?.abort()
       if (timer) clearTimeout(timer)
       window.removeEventListener('online', reconnect)
       window.removeEventListener('offline', disconnect)
@@ -205,7 +221,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
 
   const send = useCallback(async (action: SessionAction<T>) => {
     const client = transport.current
-    if (!client || client.key !== key || !client.latest || client.sending) return false
+    if (!client || client.key !== key || !client.latest || client.sending || !client.online) return false
     client.sending = true
     try {
       const response = await studioFetch(sessionRequest({ id, token }), {
@@ -223,7 +239,7 @@ export function useSession<T>(credentials: SessionCredentials | null, { retainOn
       client.report(response.status >= 500 ? 'offline' : 'connected', problem?.error ?? 'The studio could not apply that command.')
       return false
     } catch {
-      client.report('offline', 'Connection lost. The last studio state remains visible while reconnecting.')
+      client.report('offline', offlineNotice)
       return false
     } finally {
       client.sending = false

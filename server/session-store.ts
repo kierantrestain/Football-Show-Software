@@ -25,7 +25,7 @@ export interface StoredSession {
 }
 
 export interface SessionStore {
-  read(id: string): Promise<StoredSession | null>
+  read(id: string, purpose?: 'read' | 'write'): Promise<StoredSession | null>
   write(record: SessionRecord, expectedVersion?: string): Promise<boolean>
 }
 

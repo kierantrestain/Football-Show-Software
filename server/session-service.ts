@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { SessionAction, SessionRole, SessionState } from '../src/session-types'
 import type { SessionRecord, SessionStore } from './session-store'
 
-const MAX_BODY_BYTES = 1_048_576
+export const MAX_SESSION_BODY_BYTES = 1_048_576
 const LEASE_MS = 30_000
 const sessionIdPattern = /^[A-Za-z0-9_-]{16}$/
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/
@@ -28,7 +28,7 @@ async function readBody(request: Request): Promise<Content> {
   if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     throw new SessionProblem(415, 'Send a JSON studio request.')
   }
-  if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
+  if (Number(request.headers.get('content-length')) > MAX_SESSION_BODY_BYTES) {
     throw new SessionProblem(413, 'Studio state exceeds the 1 MiB session limit.')
   }
   const reader = request.body?.getReader()
@@ -41,7 +41,7 @@ async function readBody(request: Request): Promise<Content> {
       const { value, done } = await reader.read()
       if (done) break
       size += value.byteLength
-      if (size > MAX_BODY_BYTES) {
+      if (size > MAX_SESSION_BODY_BYTES) {
         void reader.cancel().catch(() => undefined)
         throw new SessionProblem(413, 'Studio state exceeds the 1 MiB session limit.')
       }
@@ -239,7 +239,7 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
       const token = request.headers.get('authorization')?.match(/^Bearer (\S+)$/i)?.[1] ?? ''
       if (!tokenPattern.test(token)) throw new SessionProblem(401, 'This session link is missing or invalid.')
 
-      let stored = await store.read(id)
+      let stored = await store.read(id, body ? 'write' : 'read')
       if (!stored) throw new SessionProblem(404, 'This studio session could not be found.')
       let { record } = stored
       const role = authorize(record, token)

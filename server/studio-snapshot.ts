@@ -41,6 +41,7 @@ export function validStudioSnapshot(content: RecordValue) {
       && finite(content.speed) && content.speed > 0
       && (content.startedAt === undefined || (finite(content.startedAt) && content.startedAt >= 0))
       && typeof content.loop === 'boolean'
+      && (content.pip === undefined || typeof content.pip === 'boolean')
       && (content.format === '16:9' || content.format === '9:16' || content.format === 'Overlay')
       && graphic(content.graphic)
       && (content.graphics === undefined || (Array.isArray(content.graphics) && content.graphics.length <= 20 && content.graphics.every(graphic)))

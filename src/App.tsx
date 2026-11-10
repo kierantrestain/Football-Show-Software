@@ -307,7 +307,7 @@ function Studio({ path, navigate }: { path: string; navigate: (path: string) => 
     {path === '/studio' && <StudioHome project={project} sessionId={session?.id} onOpen={open} onNew={() => named('new')} onDuplicate={copyProject}
       onImport={() => importFile.current?.click()} onTemplate={template => { addScene(template.scene); navigate(`/editor/${project.id}`) }}
       onRestore={snapshot => copyProject(snapshot.project, 'restored')} onData={matchId => navigate(matchId ? `/data?match=${encodeURIComponent(matchId)}` : '/data')} onGraphics={() => navigate('/graphics')} onPresent={present} onError={notify} />}
-    {path === '/data' && <DataCenter initialMatchId={new URLSearchParams(location.search).get('match') ?? undefined} onLoadTactics={loadMatch} onQueueGraphic={queue} />}
+    {path === '/data' && <DataCenter producer={desk.state?.role === 'producer' && desk.connection === 'connected'} initialMatchId={new URLSearchParams(location.search).get('match') ?? undefined} onLoadTactics={loadMatch} onQueueGraphic={queue} />}
     {path === '/graphics' && <GraphicsLibrary onQueueGraphic={queue} />}
     {path !== '/studio' && path !== '/data' && path !== '/graphics' && !editor && <main className="recovery"><h1>Studio route unavailable</h1><button className="button primary" onClick={() => navigate('/')}>Open editor</button></main>}
     {dialog === 'scene' && <SceneSettings scene={scene} index={sceneIndex} count={project.scenes.length} onChange={commitScene} onClose={() => setDialog(null)}

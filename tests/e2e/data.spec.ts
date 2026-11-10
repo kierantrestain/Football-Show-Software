@@ -77,6 +77,14 @@ test('saves panel predictions, settles a fictional result, closes submissions an
   await expect(page.getByLabel('Panel notes')).toHaveValue('The press decides it.')
   await expect(page.getByRole('row', { name: '01 Ana 2 2 6' })).toBeVisible()
   await screenshot(page, testInfo, 'predictions')
+  await page.getByRole('button', { name: 'Presenter desk' }).click()
+  await page.getByRole('button', { name: 'Start shared session' }).click()
+  await expect(page.getByRole('button', { name: 'Connect devices' })).toBeVisible()
+  await page.getByRole('button', { name: 'Editor', exact: true }).click()
+  await page.getByRole('button', { name: 'Match data', exact: true }).click()
+  await page.getByRole('button', { name: 'Predictions', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Producer cutoff override' }).check()
+  await expect(page.getByRole('button', { name: 'Save prediction' })).toBeEnabled()
 })
 
 test('previews and edits a match graphic before queuing it', async ({ page }, testInfo) => {

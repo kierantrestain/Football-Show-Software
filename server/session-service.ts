@@ -273,18 +273,29 @@ export function sessionService(store: SessionStore, options: ServiceOptions = {}
       }
 
       const action = parseAction(body.action)
-      if (body.expectedRevision !== record.revision) {
-        return reply({ error: 'Another device changed the studio. Review the latest state and retry.', state: state(record, role, now()) }, 409)
+      const priority = role === 'producer' && (action.type === 'hold' || action.type === 'clear' ||
+        (action.type === 'access' && !action.enabled))
+      const conflict = () => reply({
+        error: 'Another device changed the studio. Review the latest state and retry.',
+        state: state(record, role, now()),
+      }, 409)
+      if (!priority && body.expectedRevision !== record.revision) return conflict()
+
+      // Emergency commands act on the latest state and retry a bounded number
+      // of times if a different client writes between the read and the CAS.
+      const attempts = priority ? 3 : 1
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        const next = apply(record, role, action, now())
+        if (action.type === 'update' || action.type === 'stage') checkContent(action.content)
+        if (await store.write(next, stored.version)) {
+          waiters.get(id)?.forEach(notify => notify())
+          return reply(state(next, role, now()))
+        }
+        stored = await store.read(id, attempt + 1 < attempts ? 'write' : 'read')
+        if (!stored) throw new SessionProblem(404, 'This studio session could not be found.')
+        record = stored.record
       }
-      const next = apply(record, role, action, now())
-      if (action.type === 'update' || action.type === 'stage') checkContent(action.content)
-      if (!await store.write(next, stored.version)) {
-        const latest = await store.read(id)
-        if (!latest) throw new SessionProblem(404, 'This studio session could not be found.')
-        return reply({ error: 'Another device changed the studio. Review the latest state and retry.', state: state(latest.record, role, now()) }, 409)
-      }
-      waiters.get(id)?.forEach(notify => notify())
-      return reply(state(next, role, now()))
+      return conflict()
     } catch (error) {
       if (error instanceof SessionProblem) return reply({ error: error.message }, error.status)
       console.error('Studio session service failed.', error instanceof Error ? error.name : 'UnknownError')

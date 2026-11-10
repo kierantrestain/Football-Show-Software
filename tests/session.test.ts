@@ -116,13 +116,15 @@ test('producer, two presenters and output share authoritative cues, preview, hol
     })) } }
     await read(mutate(app.base, a, 3, { type: 'update', content: featured }))
     assert.deepEqual((await read(get(app.base, screen))).live, featured)
-    const revoked = await read(mutate(app.base, producer, 4, { type: 'access', role: 'presenter-a', enabled: false }))
+    const revoked = await read(mutate(app.base, producer, 1, { type: 'access', role: 'presenter-a', enabled: false }))
     assert.equal(revoked.lock, null)
     assert.equal((await mutate(app.base, a, 5, { type: 'update', content: isolated })).status, 403)
 
-    const held = await read(mutate(app.base, producer, 5, { type: 'hold' }))
+    const held = await read(mutate(app.base, producer, 4, { type: 'hold' }))
     assert.equal(held.mode, 'hold')
     assert.ok(held.heldAt)
+    assert.deepEqual(held.live, featured)
+    assert.equal((await mutate(app.base, b, 5, { type: 'update', content: isolated })).status, 409)
     const rehearsal = await read(mutate(app.base, b, 6, { type: 'update', content: next }))
     assert.deepEqual(rehearsal.preview, next)
     assert.deepEqual(rehearsal.live, featured)
@@ -139,7 +141,7 @@ test('producer, two presenters and output share authoritative cues, preview, hol
     try {
       assert.deepEqual((await read(get(restarted.base, screen))).live, isolated)
       assert.deepEqual((await read(get(restarted.base, b))).preview, isolated)
-      const cleared = await read(mutate(restarted.base, producer, 9, { type: 'clear' }))
+      const cleared = await read(mutate(restarted.base, producer, 7, { type: 'clear' }))
       assert.equal(cleared.live, null)
       assert.equal(cleared.mode, 'preview')
     } finally {

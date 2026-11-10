@@ -1,5 +1,7 @@
 # Touchline Studio
 
+[Open the deployed studio](https://football-show-software.vercel.app)
+
 Touchline is a football analysis and broadcast production workspace. Open the bundled Northbridge–Southbank production to rehearse five scenes with both starting XIs. The clubs, match result and reconstructed positions in the demo are fictional.
 
 ## Run the studio

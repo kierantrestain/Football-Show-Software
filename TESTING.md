@@ -12,6 +12,8 @@ npm run test:e2e -- --workers=1
 
 ## Coverage
 
+Lint, TypeScript and the production build passed. Vitest passed 18 tests across four files. Playwright passed 14 browser scenarios, followed by the separate timed rehearsal.
+
 | Check | What was exercised |
 | --- | --- |
 | Model and APIs | All 11 formations, player grouping, ball possession, reversible motion and interpolation, calibration and versioned project validation, match-provider normalisation and cache, prediction scoring, revision conflicts, payload limits, restart persistence, conditional Blob writes |
@@ -21,7 +23,17 @@ npm run test:e2e -- --workers=1
 | LAN browser rehearsal | Producer, two separately isolated tablet contexts, and 1920 × 1080 TV. Cues, movement, rewind, controller lease and revoke, hold, resume, refresh and clear, reconnect, match graphic, three-player comparison, media annotation, portrait and transparent output, and a pitch inset |
 | Hosted browser smoke | Same four roles on the Vercel production URL. Creation in private Blob, 22-player take, presenter scene and highlight updates, competing writes returning one success and one conflict, hold through TV refresh, retake, clear and no editing controls |
 
-The first hosted rehearsal found a conditional-write failure when the delivery ETag differed from the Blob metadata ETag. The store now reads the canonical metadata ETag before the uncached snapshot for conditional writes. The first timed LAN run found an outstanding long poll could commit a frame after the browser reported offline. The connection now aborts and invalidates that poll before retaining the frame. The short four-client rehearsal passed after both fixes.
+The first hosted rehearsal found a conditional-write failure when the delivery ETag differed from the Blob metadata ETag. The store now reads the canonical metadata ETag before the uncached snapshot for conditional writes. The first timed LAN run found an outstanding long poll could commit a frame after the browser reported offline. The connection now aborts and invalidates that poll before retaining the frame. The short four-client rehearsal passed after both fixes. The final hosted check showed that a recent presenter update could leave the producer with an old revision when pressing Hold. Producer Hold, Clear and Revoke now apply to the latest authoritative revision through conditional writes. Ordinary edits still reject stale revisions.
+
+## Ten-minute studio rehearsal
+
+The corrected LAN run passed all ten minute marks. Playwright measured 10.1 minutes. Four independent Chrome contexts ran the producer desk, two touch-enabled tablets, and 1920 × 1080 output. The opening formation, pressing trigger, progression and recovery scenes used both starting XIs and exercised the passing sequence and curved movement.
+
+The TV retained its previous frame through the forced disconnect and offline reload, caught up on reconnect, and kept the held image during preview changes. The rehearsal took a match result, a sourced three-player comparison and a telestrated still to air, then checked pitch inset, portrait framing, transparent output and clear. The captured on-air feed remained free of editing controls.
+
+```sh
+STUDIO_REHEARSAL_SOAK=1 npm run test:e2e -- session.spec.ts
+```
 
 ## Playback performance
 
